@@ -64,6 +64,12 @@ Deliberately not in step 2: no employee screen, no push to the device, no leave,
 
 Deliberately not in step 3: no late minutes, no daily attendance, no sheet.
 
+**Step 4 is built.** Both correction paths, both marked, both counted. A guard entry has no field for a time — the check constraint refuses a guard row that carries one, and the function has no parameter for it. An HR retroactive entry must carry a time and a reason in words. Both land on an attendance day through the schedule in force, so a night-shift correction after midnight belongs to the shift's day. `hr punches --employee N --day D` reads device punches and corrections together, and every line says where it came from and, if a person made it, who and why. `hr corrections count` is per employee per period, split by path — the signal SPEC §3 asks for.
+
+**One gap, deliberately not filled: a mistaken correction cannot be undone.** A guard entry made for the wrong employee stays on the record. SPEC §3 does not say what should replace it — an offsetting row, a void row, or nothing — so it is parked rather than invented.
+
+Deliberately not in step 4: no daily attendance, no late minutes, no sheet, no screen.
+
 **openpyxl** was added for it: it reads .xlsx without a spreadsheet application and writes the fixture, so one dependency covers both directions. It cannot read the legacy .xls format — an .xls from HR gets re-saved as .xlsx before import.
 
 Run it:
@@ -84,7 +90,15 @@ Run it:
 
     hr schedule show --group NIGHT-PROD --date 2026-08-17
     hr schedule attendance-day --group NIGHT-PROD --at "2026-08-18 04:35:00"
-    hr calendar adjust --date 2026-05-01 --closes no --reason "..." --by "..." 
+    hr calendar adjust --date 2026-05-01 --closes no --reason "..." --by "..."
+
+    uv run python tools/corrections_gate.py   # must exit 0
+
+    hr corrections guard --employee 0090 --reason biometric_failed --by "Guard: ..."
+    hr corrections retroactive --employee 0090 --at "2026-08-17 08:05:00" \
+        --reason "device down" --by "HR: ..."
+    hr corrections count --from 2026-08-01 --to 2026-08-31
+    hr punches --employee 0090 --day 2026-08-17
 
 HR's real list goes in `import/`, which is not committed. The importer is told which sheet, which rows and which column letters hold what; it never matches on header text, it echoes the headers back so a person can see where the mapping is pointing, and one bad row writes nothing at all.
 
@@ -201,6 +215,8 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**How early before a shift, and how late after it, does a punch still belong to that day?** (SPEC §9 A30). The seeded 240 minutes is a guess; real punches settle it|The first real capture|Daily attendance|
 |**Which group runs which shift** (SPEC §9 A31)? The seeded schedules are provisional and marked so in the database|HR|Schedule|
 |**The group codes themselves are invented.** DAY-PROD, NIGHT-PROD and OFFICE came from the sample spreadsheet, not from HR — they are replaced by whatever the real employee list carries, not corrected|HR|Schedule|
+|**How is a mistaken correction undone?** A guard entry made for the wrong employee cannot be edited or deleted, and SPEC §3 does not say what should replace it|HR, then management|Corrections|
+|Confirm the site timezone (SPEC §9 A32), and that a PIN is never reassigned to another employee while old punches still matter (A33)|Zi Fong / HR|Corrections, daily attendance|
 |Does the sheet need to stay Excel, or is a screen acceptable?|HR|Milestone 1 output|
 |**Can SQL Account import a file, or is it keyed by hand?** Sample export if yes|Accounts|Milestone 2 deliverable|
 |What do `DW` `MT` `MR` `CL` `HL` `EX` `PT` `AD` `LS` `OOB` mean, and which are actually used?|Accounts|Milestone 2|

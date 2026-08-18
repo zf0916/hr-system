@@ -32,10 +32,12 @@ from app.models import (
     GroupSchedule,
     Holiday,
     HolidayAdjustment,
+    ManualPunch,
     ParsedPunch,
     ParserSetting,
     RawRequest,
 )
+from app.cli_corrections import add_parsers as add_corrections_parsers
 from app.cli_schedule import add_parsers as add_schedule_parsers
 from app.parser import replay as replay_parser
 from app.seed import seed as seed_rows
@@ -126,6 +128,9 @@ def cmd_status(args) -> int:
             "holiday": session.scalar(select(func.count()).select_from(Holiday)),
             "holiday_adjustment": session.scalar(
                 select(func.count()).select_from(HolidayAdjustment)
+            ),
+            "manual_punch": session.scalar(
+                select(func.count()).select_from(ManualPunch)
             ),
         }
     print(_dsn())
@@ -292,6 +297,7 @@ def main() -> int:
     ).set_defaults(func=cmd_employees_rekey)
 
     add_schedule_parsers(sub)
+    add_corrections_parsers(sub)
 
     args = parser.parse_args()
     return args.func(args)

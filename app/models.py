@@ -26,6 +26,7 @@ from sqlalchemy import (
     event,
     func,
     literal_column,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, ExcludeConstraint, JSONB, TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase, mapped_column
@@ -586,3 +587,126 @@ class HolidayAdjustment(Base):
 
 
 Index("ix_holiday_adjustment_date", HolidayAdjustment.holiday_date)
+
+
+# ---------------------------------------------------------------------------
+# Step 4: corrections.
+#
+# A missed, failed or wrong punch is corrected by adding a row beside the punch
+# data, never by editing it (SPEC §3, §13). Every row carries who made it, when,
+# and why.
+#
+# The two paths differ in one structural way, and it is the whole point. A
+# guard's entry has no field for a time: "the log alone does not prevent it;
+# removing the time field does" (SPEC §3). HR's retroactive entry does have one,
+# because a device that was down yesterday can only be corrected by naming
+# yesterday.
+# ---------------------------------------------------------------------------
+
+
+class SiteSetting(Base):
+    """Where the factory is, in the terms the system needs. Assumed, so rows."""
+
+    __tablename__ = "site_setting"
+
+    key = mapped_column(Text, primary_key=True)
+    value = mapped_column(Text, nullable=False)
+    note = mapped_column(Text)
+
+
+class CorrectionReason(Base):
+    """The reasons each path may give (SPEC §3).
+
+    The guard picks from a list — biometric failed, not enrolled. HR may give
+    any reason, and gives it in words.
+    """
+
+    __tablename__ = "correction_reason"
+
+    code = mapped_column(Text, primary_key=True)
+    label = mapped_column(Text, nullable=False)
+    path = mapped_column(Text, nullable=False)  # 'guard' or 'hr_retroactive'
+    note = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "path IN ('guard', 'hr_retroactive')", name="correction_reason_path_known"
+        ),
+    )
+
+
+class ManualPunch(Base):
+    """A punch a person recorded, not the device.
+
+    There is no value of `path` that means "device". A row in this table is a
+    manual punch by construction, and the read that puts it next to device
+    punches says so on every row — an unmarked manual punch is indistinguishable
+    from a biometric one and recreates the hole the device exists to close
+    (SPEC §3, §13).
+
+    Times, and why there are two columns:
+
+      recorded_at    server-stamped, always. When the entry was made.
+      asserted_time  the local time the entry claims a punch happened.
+
+    A guard entry has `asserted_time` NULL and the database refuses anything
+    else. The guard records that the employee is standing in front of him now;
+    what time that is, is the server's to say. An HR retroactive entry must
+    carry one — correcting a day the device was down means naming that day.
+    """
+
+    __tablename__ = "manual_punch"
+
+    id = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    employee_id = mapped_column(
+        BigInteger, ForeignKey("employee.id"), nullable=False
+    )
+    path = mapped_column(Text, nullable=False)
+
+    # clock_timestamp(), not now(): now() is the transaction's start time, and
+    # the stamp on a guard entry is meant to be the moment the entry was made.
+    recorded_at = mapped_column(
+        SERVER_TS, nullable=False, server_default=text("clock_timestamp()")
+    )
+    asserted_time = mapped_column(DEVICE_TS)
+
+    # Derived from the schedule in force, at entry — the same rule device
+    # punches follow, so a night-shift correction lands on the right day.
+    # Rebuildable: `hr corrections rebuild-days`.
+    attendance_day = mapped_column(Date, nullable=False)
+    schedule_id = mapped_column(BigInteger, ForeignKey("group_schedule.id"))
+
+    reason_code = mapped_column(Text, ForeignKey("correction_reason.code"))
+    reason = mapped_column(Text)
+    made_by = mapped_column(Text, nullable=False)
+    note = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "path IN ('guard', 'hr_retroactive')", name="manual_punch_path_known"
+        ),
+        # The rule that makes guard entry something other than buddy punching
+        # with a log: no time field, enforced here rather than in whichever code
+        # path writes next.
+        CheckConstraint(
+            "(path = 'guard' AND asserted_time IS NULL) OR "
+            "(path = 'hr_retroactive' AND asserted_time IS NOT NULL)",
+            name="manual_punch_guard_cannot_state_a_time",
+        ),
+        # A guard picks a reason from the list; HR says why in words. Neither
+        # may record nothing.
+        CheckConstraint(
+            "(path = 'guard' AND reason_code IS NOT NULL) OR "
+            "(path = 'hr_retroactive' AND reason IS NOT NULL "
+            "AND length(btrim(reason)) > 0)",
+            name="manual_punch_reason_recorded",
+        ),
+        # Attributable to one named person (SPEC §3).
+        CheckConstraint(
+            "length(btrim(made_by)) > 0", name="manual_punch_made_by_recorded"
+        ),
+    )
+
+
+Index("ix_manual_punch_employee_day", ManualPunch.employee_id, ManualPunch.attendance_day)
+Index("ix_manual_punch_attendance_day", ManualPunch.attendance_day)

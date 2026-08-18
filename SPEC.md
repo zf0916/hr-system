@@ -72,6 +72,8 @@ A missed, failed or wrong punch is corrected by **adding a row to a separate adj
 
 **Accepted residual risk:** a colluding guard can still enter a punch for an absent employee. Software cannot prevent that. But it is attributable to one named person, counted per employee, and cannot be backdated — against a punch card, where the same act is free, invisible and unattributable.
 
+**A correction lands on an attendance day the same way a punch does** — through the schedule in force, so a night-shift correction after midnight belongs to the shift's day, not the clock's. It is derived, and rebuilt when a schedule is corrected.
+
 **Every manual punch is marked on the generated sheet and counted per employee per period.** An unmarked manual punch is indistinguishable from a biometric one and recreates the hole the device exists to close. **A rising count for one employee means a bad enrollment or a process being worked around** — both need acting on.
 
 **No punch and an absence are not the same thing** and are never collapsed into one status. No punch is a fact; absence is an HR judgement.
@@ -213,8 +215,12 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A29|An employee number is exactly 4 digits; anything else stops an import until it is accepted deliberately|
 |A30|A punch belongs to an attendance day if it falls within 240 minutes before that day's shift start or 240 minutes after its end|
 |A31|Which group runs which shift — DAY-PROD day, NIGHT-PROD night, OFFICE day with the office break|
+|A32|The site's timezone is Asia/Kuala_Lumpur, and a guard entry's server stamp is read as a local punch time through it|
+|A33|A device punch belongs to the employee its PIN mapped to on the punch's own date, and to the group that employee was in on that date|
 
 **Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 and A21 are both isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
+
+A32 and A33 are what turn a correction and a device punch into rows about the same person on the same day. A32 is a row; A33 is the date the mapping is read on, and it matters only when a PIN is reassigned or an employee changes group mid-shift.
 
 A30 is the width of the attendance-day window, and it is per schedule row. It is a guess until real punches show how early people arrive and how late they leave. A31 is provisional in the strongest sense: the group codes came from a sample list, not from HR, and every seeded schedule is marked provisional in the database.
 

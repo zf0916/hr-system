@@ -8,6 +8,7 @@ protocol being unverified is survivable.
 import datetime as dt
 
 from app.models import (
+    CorrectionReason,
     Device,
     DeviceOption,
     EmployeeNumberRule,
@@ -15,6 +16,7 @@ from app.models import (
     ParserSetting,
     Role,
     Section,
+    SiteSetting,
 )
 
 # SPEC §9 A26. §12 fixes that the handshake answers `GET OPTION FROM: {SN}`
@@ -134,6 +136,21 @@ PROVISIONAL_SHIFTS = {
 PROVISIONAL_REST_WEEKDAYS = [7]
 
 
+# SPEC §9 A32. The device is set to +8 (SPEC §10) and the factory is in Melaka.
+# A guard entry is stamped by the server, and this is what turns that instant
+# into the local time a device punch would have carried.
+SITE_SETTINGS = [
+    ("timezone", "Asia/Kuala_Lumpur", "A32 — used to read a server stamp as a local punch time"),
+]
+
+# The reasons each correction path may give (SPEC §3). The guard picks from a
+# list; HR gives any reason, in words.
+CORRECTION_REASONS = [
+    ("biometric_failed", "Biometric failed at the device", "guard", "SPEC §3"),
+    ("not_enrolled", "Not enrolled yet", "guard", "SPEC §3"),
+]
+
+
 def seed(session) -> None:
     for serial, label, note in DEVICES:
         session.add(Device(serial_number=serial, label=label, note=note))
@@ -153,4 +170,8 @@ def seed(session) -> None:
         session.add(EmployeeNumberRule(key=key, value=value, note=note))
     for code, label, note in HOLIDAY_SCOPES:
         session.add(HolidayScope(code=code, label=label, note=note))
+    for key, value, note in SITE_SETTINGS:
+        session.add(SiteSetting(key=key, value=value, note=note))
+    for code, label, path, note in CORRECTION_REASONS:
+        session.add(CorrectionReason(code=code, label=label, path=path, note=note))
     session.commit()
