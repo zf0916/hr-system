@@ -2,3 +2,8 @@
 __pycache__/
 *.pyc
 .env
+
+# HR's real employee list is not committed — it is personal data, and the
+# committed fixture is what the importer is exercised against.
+import/*
+!import/.gitkeep

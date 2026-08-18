@@ -50,9 +50,15 @@ The only thing actually blocking the build is **the employee list** — number, 
 
 ## Where it stands
 
-**Step 1 is built.** The receiver (every route in SPEC.md §12), the raw request layer, the punch parsing layer and the device simulator. Nothing below those two layers exists: no employees, no daily attendance, no sheet. Steps 2–9 not started.
+**Step 1 is built.** The receiver (every route in SPEC.md §12), the raw request layer, the punch parsing layer and the device simulator. Steps 3–9 not started.
 
 The simulator runs a full push cycle and exits clean. Each of these was then broken on purpose and the simulator failed on every one: the catch-all route removed, trailing-slash redirects left on, an auth check added, the raw layer deduplicating, the body decoded at capture, FastAPI's own JSON error page reaching the device, and the parser raising on every line. The parser one is the interesting failure — every response stayed `200 OK: {n}` and only the parsed layer went empty, which is the rule §12 asks for.
+
+**Step 2 is built and is not done.** Its done-when is "a real employee list loads", and the list does not exist yet. What exists: the employee model, effective-dated; the device-PIN mapping in its own dated table; an Excel importer driven by an explicit mapping file; a committed fixture spreadsheet; and a gate of 24 deliberate mistakes, all of which the importer refuses. When HR's file arrives, step 2 finishes by writing a mapping file for it — no code change, unless the file carries a field the model has no room for.
+
+Deliberately not in step 2: no employee screen, no push to the device, no schedule, no leave, no daily attendance.
+
+**openpyxl** was added for it: it reads .xlsx without a spreadsheet application and writes the fixture, so one dependency covers both directions. It cannot read the legacy .xls format — an .xls from HR gets re-saved as .xlsx before import.
 
 Run it:
 
@@ -60,6 +66,12 @@ Run it:
     docker compose exec api hr seed            # drops, recreates and seeds — one command
     uv run python tools/adms_sim.py --port 8080  # must exit 0
     docker compose exec api hr replay          # rebuild parsed punches from the raw layer
+
+    docker compose exec api hr employees import /srv/fixtures/employees_sample.xlsx \
+        --mapping /srv/fixtures/employees_sample.mapping.toml --allow-new group
+    uv run python tools/employee_import_gate.py  # must exit 0
+
+HR's real list goes in `import/`, which is not committed. The importer is told which sheet, which rows and which column letters hold what; it never matches on header text, it echoes the headers back so a person can see where the mapping is pointing, and one bad row writes nothing at all.
 
 `hr seed` refuses to drop once requests have been captured, and needs `--force` to go ahead. That guard becomes the real thing on the first day of the parallel run, when dropping stops being recoverable.
 
@@ -164,6 +176,7 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |Is the 30-minute threshold applied per month or per payroll half?|HR|Milestone 3|
 |What exactly does `AB — absent cut 3 times` cut, and against what?|HR|Milestone 3|
 |Is the employee number always 4 digits, and is it the device PIN?|HR|Enrollment|
+|**When a number in the list is not four digits, is it a typo, an older format, or a different scheme?** (SPEC §9 A28, A29). Until answered the importer refuses it and has to be told to accept it|HR|The employee list|
 |Are numbers reused after someone leaves?|HR|Employees|
 |What employee groups exist, and does the group decide shift and break?|HR|Schedule|
 |Half-day marks — which leave types can be half days?|HR|Leave|

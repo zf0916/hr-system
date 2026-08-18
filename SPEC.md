@@ -201,8 +201,12 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A25|The guard can reach the application where failures happen|
 |A26|The handshake answers these options: Stamp, OpStamp, ErrorDelay, Delay, TransTimes, TransInterval, TransFlag, TimeZone, Realtime, Encrypt|
 |A27|An ATTLOG body decodes as UTF-8, else GBK, else Latin-1|
+|A28|An employee number's matching key is the number padded on the left to 4 characters with zeros|
+|A29|An employee number is exactly 4 digits; anything else stops an import until it is accepted deliberately|
 
 **Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 and A21 are both isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
+
+A28 and A29 are the employee number's shape and its key. §2 settles that the stored number is never padded or stripped and that a separate key does the matching; it does not settle what a number may look like, and BUILD.md parks that question. Both are rows, so correcting them is an UPDATE and a rekey — no stored number is touched.
 
 A26 and A27 are the two the receiver itself runs on. §12 fixes that the handshake answers `Key=Value` lines and that names are GBK on many builds; it does not fix which options or which encoding. Both are rows, so the first real handshake and the first real body correct them with an UPDATE.
 

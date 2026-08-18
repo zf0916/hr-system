@@ -1,0 +1,7 @@
+HR's real employee list goes here. It is not committed.
+
+    docker compose exec api hr employees import /srv/import/<file>.xlsx \
+        --mapping /srv/import/<file>.mapping.toml --allow-new group
+
+Copy fixtures/employees_sample.mapping.toml as a starting point and change the
+sheet name, the row numbers and the column letters to match the file.

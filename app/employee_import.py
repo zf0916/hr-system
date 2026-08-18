@@ -1,0 +1,594 @@
+"""Loading the employee list from the spreadsheet HR sends.
+
+The list does not exist yet and nobody has seen its columns. So the importer is
+told, in an explicit mapping file, which sheet to read, which row the data
+starts on, and which column letter holds which field. **Header text is never
+matched on.** It is read back and echoed in the report, so a person can see at
+a glance that `employee_number` is pointing at the column headed `No.` and not
+at the one headed `Dept` — but nothing in the code decides anything from it.
+
+Everything is checked before anything is written, and one bad row writes
+nothing at all. A wrong mapping has to fail out loud; the failure this design
+exists to prevent is a quiet load of plausible-looking wrong employees.
+
+What it never does: pad or strip an employee number on the way in (SPEC §13).
+The number is stored exactly as the sheet gave it. Padding belongs to the
+separate matching key, which is rebuildable — `hr employees rekey`.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import re
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from openpyxl import load_workbook
+from openpyxl.utils import column_index_from_string, get_column_letter
+from sqlalchemy import delete, select
+
+from app.models import (
+    DeviceUserMap,
+    Employee,
+    EmployeeAssignment,
+    EmployeeGroup,
+    EmployeeImport,
+    EmployeeNumberKey,
+    EmployeeNumberRule,
+    EmploymentPeriod,
+    Role,
+    Section,
+)
+
+REQUIRED_COLUMNS = ("employee_number", "name", "section", "role", "group", "active_from")
+OPTIONAL_COLUMNS = ("left_on", "device_pin")
+ALL_COLUMNS = REQUIRED_COLUMNS + OPTIONAL_COLUMNS
+TOP_LEVEL_KEYS = {
+    "sheet",
+    "sheet_index",
+    "header_row",
+    "first_data_row",
+    "last_data_row",
+    "date_format",
+    "device_serial",
+    "columns",
+}
+
+
+class MappingError(Exception):
+    """The mapping file itself is wrong. Nothing is read."""
+
+
+@dataclass
+class RowProblem:
+    row: int
+    field: str
+    message: str
+
+    def __str__(self) -> str:
+        return f"row {self.row}: {self.field}: {self.message}"
+
+
+@dataclass
+class Mapping:
+    sheet: str | None
+    sheet_index: int | None
+    header_row: int | None
+    first_data_row: int
+    last_data_row: int | None
+    date_format: str | None
+    device_serial: str | None
+    columns: dict[str, int]  # field -> 1-based column index
+    text: str
+    filename: str
+
+
+@dataclass
+class StagedRow:
+    row: int
+    employee_number: str
+    number_key: str
+    number_from_numeric_cell: bool
+    odd_number: bool
+    name: str
+    section: str
+    role: str
+    group: str
+    active_from: dt.date
+    left_on: dt.date | None
+    device_pin: str | None
+
+
+@dataclass
+class Result:
+    problems: list[RowProblem] = field(default_factory=list)
+    staged: list[StagedRow] = field(default_factory=list)
+    blank_rows: list[int] = field(default_factory=list)
+    new_vocabulary: list[tuple[str, str]] = field(default_factory=list)
+    headers: dict[str, str] = field(default_factory=dict)
+    written: dict[str, int] = field(default_factory=dict)
+
+
+# ---- the mapping file ------------------------------------------------------
+
+
+def _column_index(field_name: str, value) -> int:
+    """A column letter or a 1-based number. Never a header name."""
+    if isinstance(value, bool):
+        raise MappingError(f"columns.{field_name}: {value!r} is not a column")
+    if isinstance(value, int):
+        if value < 1:
+            raise MappingError(f"columns.{field_name}: column numbers start at 1")
+        return value
+    if isinstance(value, str) and re.fullmatch(r"[A-Za-z]{1,3}", value.strip()):
+        return column_index_from_string(value.strip().upper())
+    raise MappingError(
+        f"columns.{field_name}: {value!r} is not a column letter or number. "
+        "Header names are never matched on — give the letter."
+    )
+
+
+def read_mapping(path: Path) -> Mapping:
+    text = path.read_text(encoding="utf-8")
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise MappingError(f"{path}: {exc}") from exc
+
+    unknown = set(raw) - TOP_LEVEL_KEYS
+    if unknown:
+        raise MappingError(f"{path}: unknown settings {sorted(unknown)}")
+
+    if ("sheet" in raw) == ("sheet_index" in raw):
+        raise MappingError(
+            f"{path}: give exactly one of sheet (its name) or sheet_index "
+            "(1-based). Which sheet holds the list is not guessed."
+        )
+
+    columns_raw = raw.get("columns")
+    if not isinstance(columns_raw, dict):
+        raise MappingError(f"{path}: a [columns] table is required")
+
+    unknown = set(columns_raw) - set(ALL_COLUMNS)
+    if unknown:
+        raise MappingError(
+            f"{path}: [columns] has fields this importer does not know: "
+            f"{sorted(unknown)}. Known fields: {list(ALL_COLUMNS)}"
+        )
+    missing = [c for c in REQUIRED_COLUMNS if c not in columns_raw]
+    if missing:
+        raise MappingError(f"{path}: [columns] is missing {missing}")
+
+    columns = {name: _column_index(name, value) for name, value in columns_raw.items()}
+    doubled = {}
+    for name, index in columns.items():
+        doubled.setdefault(index, []).append(name)
+    clashes = {get_column_letter(i): n for i, n in doubled.items() if len(n) > 1}
+    if clashes:
+        raise MappingError(
+            f"{path}: two fields point at the same column: {clashes}. "
+            "That is almost always a mistake in the mapping."
+        )
+
+    first_data_row = raw.get("first_data_row")
+    if not isinstance(first_data_row, int) or first_data_row < 1:
+        raise MappingError(f"{path}: first_data_row is required, and is 1-based")
+    last_data_row = raw.get("last_data_row")
+    if last_data_row is not None and (
+        not isinstance(last_data_row, int) or last_data_row < first_data_row
+    ):
+        raise MappingError(f"{path}: last_data_row must be at or after first_data_row")
+
+    return Mapping(
+        sheet=raw.get("sheet"),
+        sheet_index=raw.get("sheet_index"),
+        header_row=raw.get("header_row"),
+        first_data_row=first_data_row,
+        last_data_row=last_data_row,
+        date_format=raw.get("date_format"),
+        device_serial=raw.get("device_serial"),
+        columns=columns,
+        text=text,
+        filename=str(path),
+    )
+
+
+# ---- cells -----------------------------------------------------------------
+
+
+def cell_text(value) -> str:
+    """The cell as text, with nothing added and nothing removed.
+
+    A number typed as a number arrives as an int or a float: `0090` in an
+    unformatted Excel column is the number 90 and its leading zeros were lost
+    in the spreadsheet, long before this. Rendering it as `90` is not stripping
+    — there is nothing left to strip — but it is reported, because it is the
+    single most likely thing to be wrong with a real list.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else repr(value)
+    if isinstance(value, (dt.datetime, dt.date)):
+        return value.isoformat()
+    return str(value)
+
+
+def read_date(value, date_format: str | None, field_name: str, row: int,
+              problems: list[RowProblem]) -> dt.date | None:
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    text = cell_text(value).strip()
+    if not text:
+        return None
+    if not date_format:
+        problems.append(RowProblem(
+            row, field_name,
+            f"{text!r} is text, not a date, and the mapping sets no date_format",
+        ))
+        return None
+    try:
+        return dt.datetime.strptime(text, date_format).date()
+    except ValueError:
+        problems.append(RowProblem(
+            row, field_name, f"{text!r} does not fit date_format {date_format!r}"
+        ))
+        return None
+
+
+# ---- the rules, which are rows ---------------------------------------------
+
+
+def number_rules(session) -> dict[str, str]:
+    rows = session.scalars(select(EmployeeNumberRule)).all()
+    rules = {r.key: r.value for r in rows}
+    for required in ("expected_shape", "key_width", "key_pad"):
+        if required not in rules:
+            raise MappingError(
+                f"employee_number_rule is missing {required!r}. Run `hr seed`."
+            )
+    return rules
+
+
+def build_key(employee_number: str, rules: dict[str, str]) -> str:
+    """Where padding is allowed to happen, and the only place (SPEC §2)."""
+    width = int(rules["key_width"])
+    pad = rules["key_pad"]
+    return employee_number.strip().rjust(width, pad)
+
+
+# ---- reading and checking --------------------------------------------------
+
+
+def read_rows(workbook, mapping: Mapping, session, rules: dict[str, str],
+              accept_odd_numbers: bool) -> Result:
+    result = Result()
+
+    if mapping.sheet is not None:
+        if mapping.sheet not in workbook.sheetnames:
+            raise MappingError(
+                f"the workbook has no sheet named {mapping.sheet!r}. "
+                f"It has: {workbook.sheetnames}"
+            )
+        sheet = workbook[mapping.sheet]
+    else:
+        if not 1 <= mapping.sheet_index <= len(workbook.sheetnames):
+            raise MappingError(
+                f"sheet_index {mapping.sheet_index} is outside this workbook, "
+                f"which has {len(workbook.sheetnames)} sheets"
+            )
+        sheet = workbook[workbook.sheetnames[mapping.sheet_index - 1]]
+
+    if mapping.header_row:
+        for name, index in mapping.columns.items():
+            result.headers[name] = cell_text(
+                sheet.cell(row=mapping.header_row, column=index).value
+            ).strip()
+
+    last_row = mapping.last_data_row or sheet.max_row
+    expected_shape = rules["expected_shape"]
+    seen_numbers: dict[str, int] = {}
+    seen_keys: dict[str, int] = {}
+    seen_pins: dict[str, int] = {}
+
+    known_sections = set(session.scalars(select(Section.code)))
+    known_roles = set(session.scalars(select(Role.code)))
+    known_groups = set(session.scalars(select(EmployeeGroup.code)))
+    vocabulary = {
+        "section": (known_sections, set()),
+        "role": (known_roles, set()),
+        "group": (known_groups, set()),
+    }
+
+    for row in range(mapping.first_data_row, last_row + 1):
+        cells = {
+            name: sheet.cell(row=row, column=index).value
+            for name, index in mapping.columns.items()
+        }
+        if all(cell_text(v).strip() == "" for v in cells.values()):
+            result.blank_rows.append(row)
+            continue
+
+        problems_before = len(result.problems)
+
+        # The number, exactly as given.
+        raw_number = cells["employee_number"]
+        number = cell_text(raw_number)
+        from_numeric = isinstance(raw_number, (int, float)) and not isinstance(
+            raw_number, bool
+        )
+        odd = not re.fullmatch(expected_shape, number)
+        if not number.strip():
+            result.problems.append(RowProblem(row, "employee_number", "is empty"))
+        elif odd and not accept_odd_numbers:
+            result.problems.append(RowProblem(
+                row, "employee_number",
+                f"{number!r} does not match the expected shape {expected_shape} "
+                f"(employee_number_rule). It would be stored exactly as it is and "
+                f"matched as {build_key(number, rules)!r} — pass "
+                "--accept-odd-numbers if that is what you want",
+            ))
+        if number in seen_numbers:
+            result.problems.append(RowProblem(
+                row, "employee_number",
+                f"{number!r} is already used on row {seen_numbers[number]}",
+            ))
+        key = build_key(number, rules) if number.strip() else ""
+        if key and key in seen_keys and seen_keys[key] != row:
+            result.problems.append(RowProblem(
+                row, "employee_number",
+                f"{number!r} matches as {key!r}, the same as row {seen_keys[key]} — "
+                "two numbers that pad to one key are one person",
+            ))
+        if number.strip():
+            seen_numbers.setdefault(number, row)
+            seen_keys.setdefault(key, row)
+
+        name = cell_text(cells["name"]).strip()
+        if not name:
+            result.problems.append(RowProblem(row, "name", "is empty"))
+
+        values = {}
+        for field_name in ("section", "role", "group"):
+            value = cell_text(cells[field_name]).strip()
+            values[field_name] = value
+            if not value:
+                result.problems.append(RowProblem(row, field_name, "is empty"))
+                continue
+            known, added = vocabulary[field_name]
+            if value not in known and value not in added:
+                added.add(value)
+
+        active_from = read_date(
+            cells["active_from"], mapping.date_format, "active_from", row,
+            result.problems,
+        )
+        if active_from is None and not any(
+            p.row == row and p.field == "active_from" for p in result.problems
+        ):
+            result.problems.append(RowProblem(row, "active_from", "is empty"))
+
+        left_on = None
+        if "left_on" in mapping.columns:
+            left_on = read_date(
+                cells["left_on"], mapping.date_format, "left_on", row,
+                result.problems,
+            )
+        if active_from and left_on and left_on < active_from:
+            result.problems.append(RowProblem(
+                row, "left_on",
+                f"{left_on.isoformat()} is before active_from "
+                f"{active_from.isoformat()}",
+            ))
+
+        pin = None
+        if "device_pin" in mapping.columns:
+            pin = cell_text(cells["device_pin"]).strip() or None
+            if pin and pin in seen_pins:
+                result.problems.append(RowProblem(
+                    row, "device_pin",
+                    f"{pin!r} is already used on row {seen_pins[pin]} — one PIN "
+                    "cannot belong to two employees",
+                ))
+            if pin:
+                seen_pins.setdefault(pin, row)
+
+        if len(result.problems) == problems_before and active_from:
+            result.staged.append(StagedRow(
+                row=row,
+                employee_number=number,
+                number_key=key,
+                number_from_numeric_cell=from_numeric,
+                odd_number=odd,
+                name=name,
+                section=values["section"],
+                role=values["role"],
+                group=values["group"],
+                active_from=active_from,
+                left_on=left_on,
+                device_pin=pin,
+            ))
+
+    for kind, (_known, added) in vocabulary.items():
+        for value in sorted(added):
+            result.new_vocabulary.append((kind, value))
+    return result
+
+
+def check_against_database(session, result: Result) -> None:
+    numbers = [s.employee_number for s in result.staged]
+    if numbers:
+        existing = set(
+            session.scalars(
+                select(Employee.employee_number).where(
+                    Employee.employee_number.in_(numbers)
+                )
+            )
+        )
+        for staged in result.staged:
+            if staged.employee_number in existing:
+                result.problems.append(RowProblem(
+                    staged.row, "employee_number",
+                    f"{staged.employee_number!r} is already loaded. "
+                    "--replace reloads the list from scratch",
+                ))
+    keys = [s.number_key for s in result.staged]
+    if keys:
+        taken = set(
+            session.scalars(
+                select(EmployeeNumberKey.key).where(EmployeeNumberKey.key.in_(keys))
+            )
+        )
+        for staged in result.staged:
+            if staged.number_key in taken:
+                result.problems.append(RowProblem(
+                    staged.row, "employee_number",
+                    f"matching key {staged.number_key!r} is already taken",
+                ))
+
+
+# ---- writing ---------------------------------------------------------------
+
+
+def clear_employees(session) -> dict[str, int]:
+    """Everything the importer writes, and nothing else. Captured punches are
+    untouched: nothing at capture resolves a PIN to an employee, so they do not
+    depend on any of this."""
+    counts = {}
+    for model in (
+        DeviceUserMap,
+        EmployeeAssignment,
+        EmploymentPeriod,
+        EmployeeNumberKey,
+        Employee,
+        EmployeeImport,
+    ):
+        counts[model.__tablename__] = session.execute(delete(model)).rowcount
+    return counts
+
+
+def write(session, mapping: Mapping, result: Result, source: Path,
+          allow_new: set[str]) -> None:
+    batch = EmployeeImport(
+        source_filename=source.name,
+        source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        mapping_filename=mapping.filename,
+        mapping_text=mapping.text,
+        row_count=len(result.staged),
+    )
+    session.add(batch)
+    session.flush()
+
+    models = {"section": Section, "role": Role, "group": EmployeeGroup}
+    for kind, value in result.new_vocabulary:
+        if kind in allow_new:
+            session.add(models[kind](
+                code=value, label=value, note=f"added by import of {source.name}"
+            ))
+    session.flush()
+
+    written = {
+        "employee": 0,
+        "employee_number_key": 0,
+        "employee_assignment": 0,
+        "employment_period": 0,
+        "device_user_map": 0,
+    }
+    for staged in result.staged:
+        employee = Employee(
+            employee_number=staged.employee_number, imported_from_id=batch.id
+        )
+        session.add(employee)
+        session.flush()
+        written["employee"] += 1
+
+        session.add(EmployeeNumberKey(
+            employee_id=employee.id,
+            key=staged.number_key,
+            built_by="employee_number_rule",
+            note=None if not staged.odd_number else "built from an odd number",
+        ))
+        written["employee_number_key"] += 1
+
+        session.add(EmployeeAssignment(
+            employee_id=employee.id,
+            effective_from=staged.active_from,
+            effective_to=staged.left_on,
+            name=staged.name,
+            section_code=staged.section,
+            role_code=staged.role,
+            group_code=staged.group,
+            imported_from_id=batch.id,
+        ))
+        written["employee_assignment"] += 1
+
+        session.add(EmploymentPeriod(
+            employee_id=employee.id,
+            active_from=staged.active_from,
+            left_on=staged.left_on,
+            imported_from_id=batch.id,
+        ))
+        written["employment_period"] += 1
+
+        if staged.device_pin:
+            session.add(DeviceUserMap(
+                serial_number=mapping.device_serial,
+                pin=staged.device_pin,
+                employee_id=employee.id,
+                effective_from=staged.active_from,
+                effective_to=staged.left_on,
+                source=f"import of {source.name}",
+                imported_from_id=batch.id,
+            ))
+            written["device_user_map"] += 1
+    result.written = written
+
+
+def run_import(session, source: Path, mapping_path: Path, *, replace: bool,
+               allow_new: set[str], accept_odd_numbers: bool) -> Result:
+    """Read, check everything, then write — or write nothing at all."""
+    mapping = read_mapping(mapping_path)
+    rules = number_rules(session)
+
+    workbook = load_workbook(source, data_only=True, read_only=False)
+    try:
+        result = read_rows(workbook, mapping, session, rules, accept_odd_numbers)
+    finally:
+        workbook.close()
+
+    if replace:
+        result.written = {}
+        cleared = clear_employees(session)
+        session.flush()
+        result.written["cleared"] = sum(cleared.values())
+
+    check_against_database(session, result)
+
+    # A new value is allowed only for the kind the operator named. Blanket
+    # permission would disarm the best wrong-mapping detector there is: a
+    # section column pointed at the names would quietly become eight sections.
+    for kind, value in result.new_vocabulary:
+        if kind not in allow_new:
+            result.problems.append(RowProblem(
+                0, kind,
+                f"{value!r} is not a known {kind}. If this list really does "
+                f"introduce {kind}s, pass --allow-new {kind} — and check first "
+                "that the column is pointing where you meant",
+            ))
+
+    if result.problems:
+        session.rollback()
+        return result
+
+    write(session, mapping, result, source, allow_new)
+    return result

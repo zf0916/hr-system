@@ -1,0 +1,28 @@
+# The mapping for fixtures/employees_sample.xlsx.
+#
+# Columns are given as Excel letters. The importer never matches on header
+# text — it reads the header row only to echo it back in the report, so that a
+# mapping pointing at the wrong column is visible to a person immediately.
+#
+# When HR's real list arrives, this file is what changes. Not the code.
+
+sheet = "Staff List"     # by name; sheet_index = 2 would also work
+header_row = 4           # echoed in the report, never matched on
+first_data_row = 5       # where the employees start
+last_data_row = 12       # where they end — this sheet has a footer under the data,
+                         # and without this line the footer is refused as a half-empty
+                         # employee rather than silently imported as one
+
+# Only used for date cells that hold text. Without it, text dates are an error
+# rather than a guess.
+date_format = "%d/%m/%Y"
+
+[columns]
+employee_number = "B"    # NOT column A, which is a running number
+name            = "D"
+section         = "E"
+role            = "F"
+group           = "G"
+active_from     = "I"
+left_on         = "J"    # optional
+device_pin      = "K"    # optional

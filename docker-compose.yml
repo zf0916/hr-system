@@ -31,6 +31,12 @@ services:
       # that has to be recorded and kept (SPEC.md §10). 8000 is taken on this
       # host by Production Tracking, which stays separate from this system.
       - "${RECEIVER_PORT:-8080}:8000"
+    volumes:
+      # The importer reads spreadsheets from the host. `fixtures` is the
+      # committed sample; `import` is where HR's real list goes, and is not
+      # committed. Both read-only — nothing writes back to a source file.
+      - ./fixtures:/srv/fixtures:ro
+      - ./import:/srv/import:ro
     depends_on:
       db:
         condition: service_healthy

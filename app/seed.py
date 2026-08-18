@@ -5,7 +5,14 @@ these is an UPDATE, not a code change — which is the whole reason the device
 protocol being unverified is survivable.
 """
 
-from app.models import Device, DeviceOption, ParserSetting
+from app.models import (
+    Device,
+    DeviceOption,
+    EmployeeNumberRule,
+    ParserSetting,
+    Role,
+    Section,
+)
 
 # SPEC §9 A26. §12 fixes that the handshake answers `GET OPTION FROM: {SN}`
 # and then Key=Value lines. It does not fix which lines. This set is assembled
@@ -47,6 +54,32 @@ DEVICES = [
 ]
 
 
+# The five §2 names, as they are written on the sheet. The value is the code —
+# inventing a code scheme would be inventing something HR has not said. §2 says
+# there are others; the importer adds them when told to, and says which.
+SECTIONS = ["PACK ASSY", "QC", "MAINT", "PROJECT DOOR", "WAREHOUSE"]
+
+# The row colours from the sheet legend (SPEC §2).
+ROLES = [
+    "Management/Office",
+    "Production Assistant",
+    "HOD/Supervisor",
+    "QA/QC",
+    "Assistant Supervisor",
+    "Charge Hand",
+]
+
+# SPEC §9 A28 and A29. Whether the number is always four digits is parked and
+# unanswered, so the shape it is expected to take and the way its matching key
+# is built are both rows. Employee groups are deliberately absent: which groups
+# exist is parked too, and the first real list is what defines them.
+EMPLOYEE_NUMBER_RULE = [
+    ("expected_shape", "^[0-9]{4}$", "A29 — anything else stops the import and has to be accepted deliberately"),
+    ("key_width", "4", "A28 — the matching key is padded to this width"),
+    ("key_pad", "0", "A28 — padded with this character, on the left"),
+]
+
+
 def seed(session) -> None:
     for serial, label, note in DEVICES:
         session.add(Device(serial_number=serial, label=label, note=note))
@@ -58,4 +91,10 @@ def seed(session) -> None:
         )
     for key, value, note in PARSER_SETTINGS:
         session.add(ParserSetting(key=key, value=value, note=note))
+    for name in SECTIONS:
+        session.add(Section(code=name, label=name, note="SPEC §2"))
+    for name in ROLES:
+        session.add(Role(code=name, label=name, note="SPEC §2, sheet legend"))
+    for key, value, note in EMPLOYEE_NUMBER_RULE:
+        session.add(EmployeeNumberRule(key=key, value=value, note=note))
     session.commit()
