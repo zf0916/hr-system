@@ -110,7 +110,9 @@ Verified on the compose stack: a full cycle clean, a second cycle clean against 
 
 **The device is on site.** Power adapter pending.
 
-Artifacts received and analysed: daily attendance sheet, late coming summary and deduction record, individual time-off record, time-off salary summary, SQL Account payroll entry screen.
+Artifacts received and analysed: daily attendance sheet, late coming summary and deduction record, individual time-off record, time-off salary summary, SQL Account payroll entry screen, **leave card**.
+
+The leave card is HR's per-employee leave ledger — a header of name, number, department, date joined and entitlement, then one line per leave taken: date of application, from, to, number of days. Balance, comments and remarks are marked for office use. It has no leave type column, no approver and no signature, and 22 ruled lines. It is an output HR keeps by hand, not an input: **there is nothing to import from it, and the file is not in the repo** — it carries a real employee's name and join date, and the privacy question is still open. No fixture was made from it. What it settled is in SPEC §6 and §2.
 
 **Nothing in the protocol contract has been verified against the device** — see SPEC.md §12. The simulator therefore tests that the receiver behaves as the contract says, not that the contract is right. Only real traffic settles that.
 
@@ -209,6 +211,7 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |Are numbers reused after someone leaves?|HR|Employees|
 |What employee groups exist, and does the group decide shift and break?|HR|Schedule|
 |Half-day marks — which leave types can be half days?|HR|Leave|
+|Is there one leave card per leave type per employee, or one card covering all types? The card has no type column|HR|Nothing structural|
 |What is the note in the top-left of the attendance sheet? A close-up photo may answer the schedule question|HR|—|
 |How many pages is the sheet, and what is headcount?|HR|—|
 |2026 public holidays including Melaka state|HR|Calendar|
@@ -238,6 +241,8 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 **Artifacts still wanted**
 
 Leave application form · gate pass form · medical treatment slip · **one closed month of attendance sheet with the matching SQL Account entries** — that last one lets the whole chain be reconciled end to end before anything is built.
+
+**The leave card is not the leave application form**, and receiving it ticks none of these off. All three forms are still outstanding.
 
 The punch card itself is not needed. Its only unique content is the leave codes HR writes on it, and those already appear on the sheet.
 

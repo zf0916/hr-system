@@ -40,6 +40,7 @@ Today both HR and Accounts read the same punch card, at different times and at d
 - **A device PIN is not an employee number.** It is stored as a string, exactly as the device sends it, with no lookup at capture time.
 - **Employees are created in the application and pushed to the device**, never typed on the device.
 - Schedules and employment status are **effective-dated**. Re-rendering a past period uses the schedule and headcount that were in force then, not today's.
+- **The leave card's "Department" is the attendance sheet's Section.** One field, under two names on two pieces of paper — not a second attribute.
 
 ---
 
@@ -159,7 +160,9 @@ Codes from the sheet legend:
 - **Half-day leave exists** and is stored as a fraction.
 - **Leave naming is not a free choice** — every type must map onto SQL Account's Pay Days and No Pay Days codes.
 - A leave record carries its SQL Account code from the start, left empty until the mapping is answered.
-- **Entitlement rules, balances and approval are not designed.** Milestone 1 is entry only: employee, date or range, code.
+- **The date of application is recorded, separately from the leave dates.** From the leave card, which has a column for it: when leave was asked for and when it was taken are different facts and the card keeps both.
+- **The number of days is recorded as given, not computed from the range.** The card states it per line. A half day, and a non-working day inside a range, both mean the count and the span are not the same number — deriving one from the other would overwrite what HR wrote.
+- **Entitlement rules, balances and approval are not designed.** Milestone 1 is entry only: employee, date or range, code. The leave card's balance, entitlement, comments and remarks are marked for office use and stay out with them.
 
 ---
 
