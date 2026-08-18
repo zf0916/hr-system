@@ -22,11 +22,12 @@ from sqlalchemy import (
     Integer,
     LargeBinary,
     Text,
+    Time,
     event,
     func,
     literal_column,
 )
-from sqlalchemy.dialects.postgresql import ExcludeConstraint, JSONB, TIMESTAMP
+from sqlalchemy.dialects.postgresql import ARRAY, ExcludeConstraint, JSONB, TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase, mapped_column
 
 
@@ -410,3 +411,178 @@ class EmployeeNumberRule(Base):
     key = mapped_column(Text, primary_key=True)
     value = mapped_column(Text, nullable=False)
     note = mapped_column(Text)
+
+
+# ---------------------------------------------------------------------------
+# Step 3: schedule and calendar.
+#
+# Stored per group and effective-dated (SPEC §4), so that re-rendering a past
+# period uses what was in force then. Rest day is a column on the schedule row
+# rather than a setting somewhere else, because a group is what decides shift
+# and break — and, until HR says otherwise, may decide its rest day too.
+#
+# Public holidays and rest days drive whole columns on the sheet and are never
+# entered per employee (SPEC §4).
+# ---------------------------------------------------------------------------
+
+
+class GroupSchedule(Base):
+    """One group's working day, from a date until it is superseded.
+
+    A shift that ends after midnight says so on the row — `end_next_day` — and
+    the attendance day is worked out from that window. Nothing downstream has
+    to infer a crossed midnight by comparing two times.
+    """
+
+    __tablename__ = "group_schedule"
+
+    id = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    group_code = mapped_column(
+        Text, ForeignKey("employee_group.code"), nullable=False
+    )
+    effective_from = mapped_column(Date, nullable=False)
+    effective_to = mapped_column(Date)  # NULL: still in force
+
+    start_time = mapped_column(Time, nullable=False)
+    end_time = mapped_column(Time, nullable=False)
+    end_next_day = mapped_column(Boolean, nullable=False, default=False)
+
+    break_start = mapped_column(Time)
+    break_end = mapped_column(Time)
+    break_start_next_day = mapped_column(Boolean, nullable=False, default=False)
+    break_end_next_day = mapped_column(Boolean, nullable=False, default=False)
+
+    # A4 — assumed 0, and per group rather than global, because a decision to
+    # change it may not land on everyone at once.
+    grace_minutes = mapped_column(Integer, nullable=False, default=0)
+
+    # ISO weekdays: 1 Monday … 7 Sunday. A column on the row, not a global
+    # setting (SPEC §4: rest days shade columns, driven by the calendar).
+    rest_weekdays = mapped_column(ARRAY(Integer), nullable=False)
+
+    # A30 — how far outside the scheduled window a punch still belongs to this
+    # attendance day. Rows, because the right margin is a guess until real
+    # punches arrive.
+    window_before_minutes = mapped_column(Integer, nullable=False, default=240)
+    window_after_minutes = mapped_column(Integer, nullable=False, default=240)
+
+    provisional = mapped_column(Boolean, nullable=False, default=True)
+    source = mapped_column(Text)
+    note = mapped_column(Text)
+    created_at = mapped_column(SERVER_TS, nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint(
+            "effective_to IS NULL OR effective_to >= effective_from",
+            name="group_schedule_dates_ordered",
+        ),
+        # A shift that ends at or before it starts has to say it crosses
+        # midnight. Night shift 19:30–04:30 is legal; 19:30–04:30 on the same
+        # day is not, and is the mistake that would quietly halve a shift.
+        CheckConstraint(
+            "end_next_day OR end_time > start_time",
+            name="group_schedule_end_after_start",
+        ),
+        CheckConstraint("grace_minutes >= 0", name="group_schedule_grace_positive"),
+        CheckConstraint(
+            "window_before_minutes >= 0 AND window_after_minutes >= 0",
+            name="group_schedule_window_positive",
+        ),
+        CheckConstraint(
+            "rest_weekdays <@ ARRAY[1,2,3,4,5,6,7]",
+            name="group_schedule_rest_weekdays_valid",
+        ),
+        CheckConstraint(
+            "(break_start IS NULL) = (break_end IS NULL)",
+            name="group_schedule_break_both_or_neither",
+        ),
+        # One group cannot have two schedules in force on the same day.
+        ExcludeConstraint(
+            (literal_column("group_code"), "="),
+            (literal_column("daterange(effective_from, effective_to, '[]')"), "&&"),
+            name="group_schedule_no_overlap",
+            using="gist",
+        ),
+    )
+
+
+class HolidayScope(Base):
+    """Federal, Melaka state, or the company's own closure (SPEC §4)."""
+
+    __tablename__ = "holiday_scope"
+
+    code = mapped_column(Text, primary_key=True)
+    label = mapped_column(Text, nullable=False)
+    note = mapped_column(Text)
+
+
+class HolidayUpload(Base):
+    """One load of a year's holidays, kept so a calendar can be traced to the
+    file it came from."""
+
+    __tablename__ = "holiday_upload"
+
+    id = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    uploaded_at = mapped_column(SERVER_TS, nullable=False, server_default=func.now())
+    year = mapped_column(Integer, nullable=False)
+    source_filename = mapped_column(Text, nullable=False)
+    source_sha256 = mapped_column(Text, nullable=False)
+    mapping_filename = mapped_column(Text, nullable=False)
+    mapping_text = mapped_column(Text, nullable=False)
+    row_count = mapped_column(Integer, nullable=False)
+    provisional = mapped_column(Boolean, nullable=False, default=True)
+    note = mapped_column(Text)
+
+
+class Holiday(Base):
+    """A holiday as the uploaded list has it.
+
+    `closes` is the flag that matters on the floor: a gazetted public holiday
+    the factory works is a real case, and it is a different fact from the day
+    being gazetted at all.
+
+    One row per date. Two holidays falling on one date are one row with one
+    name — otherwise the calendar has to decide which of them wins.
+    """
+
+    __tablename__ = "holiday"
+
+    id = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    holiday_date = mapped_column(Date, nullable=False, unique=True)
+    name = mapped_column(Text, nullable=False)
+    scope_code = mapped_column(Text, ForeignKey("holiday_scope.code"), nullable=False)
+    closes = mapped_column(Boolean, nullable=False)
+    provisional = mapped_column(Boolean, nullable=False, default=True)
+    upload_id = mapped_column(BigInteger, ForeignKey("holiday_upload.id"))
+    note = mapped_column(Text)
+
+
+class HolidayAdjustment(Base):
+    """A per-date change, kept apart from the uploaded list.
+
+    The same shape as every other correction in this system: a row beside the
+    data, never an edit to it, carrying who made it and why (SPEC §3). Because
+    it is a separate row it survives a re-upload of the year, and the re-upload
+    reports which adjustments still change something.
+    """
+
+    __tablename__ = "holiday_adjustment"
+
+    id = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    made_at = mapped_column(SERVER_TS, nullable=False, server_default=func.now())
+    holiday_date = mapped_column(Date, nullable=False)
+    action = mapped_column(Text, nullable=False)  # 'set' or 'remove'
+    name = mapped_column(Text)
+    scope_code = mapped_column(Text, ForeignKey("holiday_scope.code"))
+    closes = mapped_column(Boolean)
+    reason = mapped_column(Text, nullable=False)
+    made_by = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('set', 'remove')", name="holiday_adjustment_action_known"
+        ),
+    )
+
+
+Index("ix_holiday_adjustment_date", HolidayAdjustment.holiday_date)

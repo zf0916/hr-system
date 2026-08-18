@@ -29,10 +29,14 @@ from app.models import (
     EmployeeAssignment,
     EmployeeNumberKey,
     EmploymentPeriod,
+    GroupSchedule,
+    Holiday,
+    HolidayAdjustment,
     ParsedPunch,
     ParserSetting,
     RawRequest,
 )
+from app.cli_schedule import add_parsers as add_schedule_parsers
 from app.parser import replay as replay_parser
 from app.seed import seed as seed_rows
 
@@ -115,6 +119,13 @@ def cmd_status(args) -> int:
             ),
             "device_user_map": session.scalar(
                 select(func.count()).select_from(DeviceUserMap)
+            ),
+            "group_schedule": session.scalar(
+                select(func.count()).select_from(GroupSchedule)
+            ),
+            "holiday": session.scalar(select(func.count()).select_from(Holiday)),
+            "holiday_adjustment": session.scalar(
+                select(func.count()).select_from(HolidayAdjustment)
             ),
         }
     print(_dsn())
@@ -279,6 +290,8 @@ def main() -> int:
     emp.add_parser(
         "rekey", help="rebuild the matching keys from employee_number_rule"
     ).set_defaults(func=cmd_employees_rekey)
+
+    add_schedule_parsers(sub)
 
     args = parser.parse_args()
     return args.func(args)

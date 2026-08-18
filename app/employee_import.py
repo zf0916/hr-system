@@ -21,12 +21,10 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import re
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from openpyxl import load_workbook
-from openpyxl.utils import column_index_from_string, get_column_letter
 from sqlalchemy import delete, select
 
 from app.models import (
@@ -41,50 +39,21 @@ from app.models import (
     Role,
     Section,
 )
+from app.xlsx_mapping import (
+    Mapping,
+    MappingError,
+    RowProblem,
+    cell_text,
+    iter_rows,
+    open_sheet,
+    read_date,
+    read_headers,
+    read_mapping as read_mapping_file,
+)
 
 REQUIRED_COLUMNS = ("employee_number", "name", "section", "role", "group", "active_from")
 OPTIONAL_COLUMNS = ("left_on", "device_pin")
 ALL_COLUMNS = REQUIRED_COLUMNS + OPTIONAL_COLUMNS
-TOP_LEVEL_KEYS = {
-    "sheet",
-    "sheet_index",
-    "header_row",
-    "first_data_row",
-    "last_data_row",
-    "date_format",
-    "device_serial",
-    "columns",
-}
-
-
-class MappingError(Exception):
-    """The mapping file itself is wrong. Nothing is read."""
-
-
-@dataclass
-class RowProblem:
-    row: int
-    field: str
-    message: str
-
-    def __str__(self) -> str:
-        return f"row {self.row}: {self.field}: {self.message}"
-
-
-@dataclass
-class Mapping:
-    sheet: str | None
-    sheet_index: int | None
-    header_row: int | None
-    first_data_row: int
-    last_data_row: int | None
-    date_format: str | None
-    device_serial: str | None
-    columns: dict[str, int]  # field -> 1-based column index
-    text: str
-    filename: str
-
-
 @dataclass
 class StagedRow:
     row: int
@@ -109,141 +78,6 @@ class Result:
     new_vocabulary: list[tuple[str, str]] = field(default_factory=list)
     headers: dict[str, str] = field(default_factory=dict)
     written: dict[str, int] = field(default_factory=dict)
-
-
-# ---- the mapping file ------------------------------------------------------
-
-
-def _column_index(field_name: str, value) -> int:
-    """A column letter or a 1-based number. Never a header name."""
-    if isinstance(value, bool):
-        raise MappingError(f"columns.{field_name}: {value!r} is not a column")
-    if isinstance(value, int):
-        if value < 1:
-            raise MappingError(f"columns.{field_name}: column numbers start at 1")
-        return value
-    if isinstance(value, str) and re.fullmatch(r"[A-Za-z]{1,3}", value.strip()):
-        return column_index_from_string(value.strip().upper())
-    raise MappingError(
-        f"columns.{field_name}: {value!r} is not a column letter or number. "
-        "Header names are never matched on — give the letter."
-    )
-
-
-def read_mapping(path: Path) -> Mapping:
-    text = path.read_text(encoding="utf-8")
-    try:
-        raw = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as exc:
-        raise MappingError(f"{path}: {exc}") from exc
-
-    unknown = set(raw) - TOP_LEVEL_KEYS
-    if unknown:
-        raise MappingError(f"{path}: unknown settings {sorted(unknown)}")
-
-    if ("sheet" in raw) == ("sheet_index" in raw):
-        raise MappingError(
-            f"{path}: give exactly one of sheet (its name) or sheet_index "
-            "(1-based). Which sheet holds the list is not guessed."
-        )
-
-    columns_raw = raw.get("columns")
-    if not isinstance(columns_raw, dict):
-        raise MappingError(f"{path}: a [columns] table is required")
-
-    unknown = set(columns_raw) - set(ALL_COLUMNS)
-    if unknown:
-        raise MappingError(
-            f"{path}: [columns] has fields this importer does not know: "
-            f"{sorted(unknown)}. Known fields: {list(ALL_COLUMNS)}"
-        )
-    missing = [c for c in REQUIRED_COLUMNS if c not in columns_raw]
-    if missing:
-        raise MappingError(f"{path}: [columns] is missing {missing}")
-
-    columns = {name: _column_index(name, value) for name, value in columns_raw.items()}
-    doubled = {}
-    for name, index in columns.items():
-        doubled.setdefault(index, []).append(name)
-    clashes = {get_column_letter(i): n for i, n in doubled.items() if len(n) > 1}
-    if clashes:
-        raise MappingError(
-            f"{path}: two fields point at the same column: {clashes}. "
-            "That is almost always a mistake in the mapping."
-        )
-
-    first_data_row = raw.get("first_data_row")
-    if not isinstance(first_data_row, int) or first_data_row < 1:
-        raise MappingError(f"{path}: first_data_row is required, and is 1-based")
-    last_data_row = raw.get("last_data_row")
-    if last_data_row is not None and (
-        not isinstance(last_data_row, int) or last_data_row < first_data_row
-    ):
-        raise MappingError(f"{path}: last_data_row must be at or after first_data_row")
-
-    return Mapping(
-        sheet=raw.get("sheet"),
-        sheet_index=raw.get("sheet_index"),
-        header_row=raw.get("header_row"),
-        first_data_row=first_data_row,
-        last_data_row=last_data_row,
-        date_format=raw.get("date_format"),
-        device_serial=raw.get("device_serial"),
-        columns=columns,
-        text=text,
-        filename=str(path),
-    )
-
-
-# ---- cells -----------------------------------------------------------------
-
-
-def cell_text(value) -> str:
-    """The cell as text, with nothing added and nothing removed.
-
-    A number typed as a number arrives as an int or a float: `0090` in an
-    unformatted Excel column is the number 90 and its leading zeros were lost
-    in the spreadsheet, long before this. Rendering it as `90` is not stripping
-    — there is nothing left to strip — but it is reported, because it is the
-    single most likely thing to be wrong with a real list.
-    """
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    if isinstance(value, bool):
-        return "TRUE" if value else "FALSE"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return str(int(value)) if value.is_integer() else repr(value)
-    if isinstance(value, (dt.datetime, dt.date)):
-        return value.isoformat()
-    return str(value)
-
-
-def read_date(value, date_format: str | None, field_name: str, row: int,
-              problems: list[RowProblem]) -> dt.date | None:
-    if isinstance(value, dt.datetime):
-        return value.date()
-    if isinstance(value, dt.date):
-        return value
-    text = cell_text(value).strip()
-    if not text:
-        return None
-    if not date_format:
-        problems.append(RowProblem(
-            row, field_name,
-            f"{text!r} is text, not a date, and the mapping sets no date_format",
-        ))
-        return None
-    try:
-        return dt.datetime.strptime(text, date_format).date()
-    except ValueError:
-        problems.append(RowProblem(
-            row, field_name, f"{text!r} does not fit date_format {date_format!r}"
-        ))
-        return None
 
 
 # ---- the rules, which are rows ---------------------------------------------
@@ -273,29 +107,8 @@ def build_key(employee_number: str, rules: dict[str, str]) -> str:
 def read_rows(workbook, mapping: Mapping, session, rules: dict[str, str],
               accept_odd_numbers: bool) -> Result:
     result = Result()
-
-    if mapping.sheet is not None:
-        if mapping.sheet not in workbook.sheetnames:
-            raise MappingError(
-                f"the workbook has no sheet named {mapping.sheet!r}. "
-                f"It has: {workbook.sheetnames}"
-            )
-        sheet = workbook[mapping.sheet]
-    else:
-        if not 1 <= mapping.sheet_index <= len(workbook.sheetnames):
-            raise MappingError(
-                f"sheet_index {mapping.sheet_index} is outside this workbook, "
-                f"which has {len(workbook.sheetnames)} sheets"
-            )
-        sheet = workbook[workbook.sheetnames[mapping.sheet_index - 1]]
-
-    if mapping.header_row:
-        for name, index in mapping.columns.items():
-            result.headers[name] = cell_text(
-                sheet.cell(row=mapping.header_row, column=index).value
-            ).strip()
-
-    last_row = mapping.last_data_row or sheet.max_row
+    sheet = open_sheet(workbook, mapping)
+    result.headers = read_headers(sheet, mapping)
     expected_shape = rules["expected_shape"]
     seen_numbers: dict[str, int] = {}
     seen_keys: dict[str, int] = {}
@@ -310,12 +123,8 @@ def read_rows(workbook, mapping: Mapping, session, rules: dict[str, str],
         "group": (known_groups, set()),
     }
 
-    for row in range(mapping.first_data_row, last_row + 1):
-        cells = {
-            name: sheet.cell(row=row, column=index).value
-            for name, index in mapping.columns.items()
-        }
-        if all(cell_text(v).strip() == "" for v in cells.values()):
+    for row, cells, blank in iter_rows(sheet, mapping):
+        if blank:
             result.blank_rows.append(row)
             continue
 
@@ -542,7 +351,7 @@ def write(session, mapping: Mapping, result: Result, source: Path,
 
         if staged.device_pin:
             session.add(DeviceUserMap(
-                serial_number=mapping.device_serial,
+                serial_number=mapping.extra.get("device_serial"),
                 pin=staged.device_pin,
                 employee_id=employee.id,
                 effective_from=staged.active_from,
@@ -557,7 +366,9 @@ def write(session, mapping: Mapping, result: Result, source: Path,
 def run_import(session, source: Path, mapping_path: Path, *, replace: bool,
                allow_new: set[str], accept_odd_numbers: bool) -> Result:
     """Read, check everything, then write — or write nothing at all."""
-    mapping = read_mapping(mapping_path)
+    mapping = read_mapping_file(
+        mapping_path, REQUIRED_COLUMNS, OPTIONAL_COLUMNS, ("device_serial",)
+    )
     rules = number_rules(session)
 
     workbook = load_workbook(source, data_only=True, read_only=False)

@@ -1,0 +1,21 @@
+# The mapping for the holiday spreadsheets in this directory — both the blank
+# template HR fills in and the provisional file used for testing. Same layout,
+# so the same mapping reads either.
+#
+# As with the employee list, column letters are given explicitly and header text
+# is never matched on. When HR sends the real list in their own layout, this
+# file is what changes.
+
+sheet = "Holidays"
+header_row = 4           # echoed in the report, never matched on
+first_data_row = 5
+
+# Only used if a date arrives as text rather than as a date cell.
+date_format = "%Y-%m-%d"
+
+[columns]
+date   = "A"
+name   = "B"
+scope  = "C"
+closes = "D"    # yes / no — whether the factory actually closes
+note   = "E"    # optional

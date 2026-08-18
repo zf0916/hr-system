@@ -5,10 +5,13 @@ these is an UPDATE, not a code change — which is the whole reason the device
 protocol being unverified is survivable.
 """
 
+import datetime as dt
+
 from app.models import (
     Device,
     DeviceOption,
     EmployeeNumberRule,
+    HolidayScope,
     ParserSetting,
     Role,
     Section,
@@ -80,6 +83,57 @@ EMPLOYEE_NUMBER_RULE = [
 ]
 
 
+# SPEC §4: Malaysia federal plus Melaka state. `company` is for a day the
+# factory closes that no government gazetted.
+HOLIDAY_SCOPES = [
+    ("federal", "Malaysia federal public holiday", "SPEC §4"),
+    ("melaka", "Melaka state public holiday", "SPEC §4"),
+    ("company", "company closure, not gazetted", "SPEC §4"),
+]
+
+# SPEC §9 A31 — provisional, and marked provisional in the database.
+#
+# The shift times are SPEC §4: day 08:00–17:30 is assumed (A1–A2), night
+# 19:30–04:30 and both break windows are from the sheet note, grace 0 is A4,
+# and Sunday as the rest day is from the sheet legend. What is new here is
+# *which group runs which shift*, and that is a guess: the group codes came
+# from the sample list, not from HR. Nothing is applied to a group that is not
+# named here — an unknown group stops, rather than being given a shift.
+#
+# Night shift ends the next morning, and the row says so. Its break is unknown
+# and is left empty rather than invented.
+PROVISIONAL_SHIFTS = {
+    "DAY-PROD": {
+        "start_time": dt.time(8, 0),
+        "end_time": dt.time(17, 30),
+        "end_next_day": False,
+        "break_start": dt.time(12, 30),
+        "break_end": dt.time(13, 15),
+        "note": "day shift, production break (SPEC §4)",
+    },
+    "NIGHT-PROD": {
+        "start_time": dt.time(19, 30),
+        "end_time": dt.time(4, 30),
+        "end_next_day": True,
+        "break_start": None,
+        "break_end": None,
+        "note": "night shift, ends the next morning; break unknown (SPEC §4)",
+    },
+    "OFFICE": {
+        "start_time": dt.time(8, 0),
+        "end_time": dt.time(17, 30),
+        "end_next_day": False,
+        "break_start": dt.time(12, 30),
+        "break_end": dt.time(13, 30),
+        "note": "office break (SPEC §4)",
+    },
+}
+
+# Sunday, from the sheet legend. A column on each schedule row, so a group that
+# rests on another day is a row, not a code change.
+PROVISIONAL_REST_WEEKDAYS = [7]
+
+
 def seed(session) -> None:
     for serial, label, note in DEVICES:
         session.add(Device(serial_number=serial, label=label, note=note))
@@ -97,4 +151,6 @@ def seed(session) -> None:
         session.add(Role(code=name, label=name, note="SPEC §2, sheet legend"))
     for key, value, note in EMPLOYEE_NUMBER_RULE:
         session.add(EmployeeNumberRule(key=key, value=value, note=note))
+    for code, label, note in HOLIDAY_SCOPES:
+        session.add(HolidayScope(code=code, label=label, note=note))
     session.commit()

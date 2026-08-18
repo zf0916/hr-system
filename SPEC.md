@@ -94,7 +94,15 @@ Stored per group, effective-dated: start, end, break.
 
 **Break length differs by group, so shift assignment is per group, not global.**
 
+**A shift that ends after midnight says so on its row.** Night shift 19:30–04:30 ends the following day, and the schedule row carries that fact. **The attendance day is the shift's, not the clock's** — a night-shift punch at 04:35 on Tuesday belongs to Monday, because Monday's shift window contains it. Nothing downstream infers a crossed midnight by comparing two times.
+
+**Rest day is a column on the schedule row.** A group that rests on another day is a row, not a code change.
+
 Public holidays and rest days shade whole columns on the sheet, driven by the calendar, never entered per employee.
+
+**The calendar is one row per date**, and it carries two separate facts: what the day is, and **whether the factory actually closes for it**. A gazetted public holiday that is worked is a real case, and only the second fact shades the column.
+
+**Two ways to change the calendar, and they do not fight.** A year is re-uploaded whole. A single date is changed by a row in a separate adjustment layer, which survives a re-upload and is applied on top of whatever the new upload says. **A re-upload reports every adjustment that still stands.** Discarding an adjustment silently would lose a decision somebody made deliberately.
 
 ---
 
@@ -203,8 +211,12 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A27|An ATTLOG body decodes as UTF-8, else GBK, else Latin-1|
 |A28|An employee number's matching key is the number padded on the left to 4 characters with zeros|
 |A29|An employee number is exactly 4 digits; anything else stops an import until it is accepted deliberately|
+|A30|A punch belongs to an attendance day if it falls within 240 minutes before that day's shift start or 240 minutes after its end|
+|A31|Which group runs which shift — DAY-PROD day, NIGHT-PROD night, OFFICE day with the office break|
 
 **Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 and A21 are both isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
+
+A30 is the width of the attendance-day window, and it is per schedule row. It is a guess until real punches show how early people arrive and how late they leave. A31 is provisional in the strongest sense: the group codes came from a sample list, not from HR, and every seeded schedule is marked provisional in the database.
 
 A28 and A29 are the employee number's shape and its key. §2 settles that the stored number is never padded or stripped and that a separate key does the matching; it does not settle what a number may look like, and BUILD.md parks that question. Both are rows, so correcting them is an UPDATE and a rekey — no stored number is touched.
 
@@ -303,6 +315,8 @@ Verify against real traffic at first power-on, then against the vendor spec when
 |A fallback password left in place after re-enrollment|That is the permanent shared secret|
 |Logging or retaining a password payload|Purge on completion|
 |Hard-coding a schedule, grace period, threshold, period boundary, leave code or holiday|These are rows|
+|Inferring that a shift crossed midnight by comparing two times|The schedule row states it; the attendance day follows from the shift|
+|Discarding a calendar adjustment when the year is re-uploaded|It is a deliberate decision, kept as its own row and reported|
 |Padding or stripping the employee number on write|Stored verbatim; a separate key does the matching|
 |A partial user update to the device|It wipes the whole record|
 |Building overtime|Its source is unknown|

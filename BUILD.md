@@ -56,7 +56,13 @@ The simulator runs a full push cycle and exits clean. Each of these was then bro
 
 **Step 2 is built and is not done.** Its done-when is "a real employee list loads", and the list does not exist yet. What exists: the employee model, effective-dated; the device-PIN mapping in its own dated table; an Excel importer driven by an explicit mapping file; a committed fixture spreadsheet; and a gate of 24 deliberate mistakes, all of which the importer refuses. When HR's file arrives, step 2 finishes by writing a mapping file for it — no code change, unless the file carries a field the model has no room for.
 
-Deliberately not in step 2: no employee screen, no push to the device, no schedule, no leave, no daily attendance.
+Deliberately not in step 2: no employee screen, no push to the device, no leave, no daily attendance.
+
+**Step 3 is built and is not done either.** Its done-when is "a past period renders with the schedule that was in force then" — the gate proves that against provisional data, and HR has confirmed none of it. What exists: schedules per group, effective-dated, with the rest day as a column on the row and the crossed-midnight fact stated on the row; a calendar of one row per date carrying whether the factory actually closes; a holiday importer using the same explicit mapping as the employee list; a committed blank template for HR to fill in; per-date adjustments that survive a re-upload; and the query that answers what applied for a group on a date, including which attendance day a punch belongs to.
+
+**Every schedule and every holiday now in the database is marked provisional.** The 2026 list is still parked. `fixtures/holidays_provisional_2026.xlsx` carries only holidays whose dates are fixed by the calendar — Hari Raya, Chinese New Year, Deepavali, Wesak and Thaipusam are deliberately absent, because a plausible wrong date is worse than a missing one.
+
+Deliberately not in step 3: no late minutes, no daily attendance, no sheet.
 
 **openpyxl** was added for it: it reads .xlsx without a spreadsheet application and writes the fixture, so one dependency covers both directions. It cannot read the legacy .xls format — an .xls from HR gets re-saved as .xlsx before import.
 
@@ -70,6 +76,15 @@ Run it:
     docker compose exec api hr employees import /srv/fixtures/employees_sample.xlsx \
         --mapping /srv/fixtures/employees_sample.mapping.toml --allow-new group
     uv run python tools/employee_import_gate.py  # must exit 0
+
+    docker compose exec api hr schedule seed-provisional
+    docker compose exec api hr calendar import /srv/fixtures/holidays_provisional_2026.xlsx \
+        --mapping /srv/fixtures/holidays.mapping.toml --year 2026
+    uv run python tools/schedule_gate.py         # must exit 0
+
+    hr schedule show --group NIGHT-PROD --date 2026-08-17
+    hr schedule attendance-day --group NIGHT-PROD --at "2026-08-18 04:35:00"
+    hr calendar adjust --date 2026-05-01 --closes no --reason "..." --by "..." 
 
 HR's real list goes in `import/`, which is not committed. The importer is told which sheet, which rows and which column letters hold what; it never matches on header text, it echoes the headers back so a person can see where the mapping is pointing, and one bad row writes nothing at all.
 
@@ -183,6 +198,9 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |What is the note in the top-left of the attendance sheet? A close-up photo may answer the schedule question|HR|—|
 |How many pages is the sheet, and what is headcount?|HR|—|
 |2026 public holidays including Melaka state|HR|Calendar|
+|**How early before a shift, and how late after it, does a punch still belong to that day?** (SPEC §9 A30). The seeded 240 minutes is a guess; real punches settle it|The first real capture|Daily attendance|
+|**Which group runs which shift** (SPEC §9 A31)? The seeded schedules are provisional and marked so in the database|HR|Schedule|
+|**The group codes themselves are invented.** DAY-PROD, NIGHT-PROD and OFFICE came from the sample spreadsheet, not from HR — they are replaced by whatever the real employee list carries, not corrected|HR|Schedule|
 |Does the sheet need to stay Excel, or is a screen acceptable?|HR|Milestone 1 output|
 |**Can SQL Account import a file, or is it keyed by hand?** Sample export if yes|Accounts|Milestone 2 deliverable|
 |What do `DW` `MT` `MR` `CL` `HL` `EX` `PT` `AD` `LS` `OOB` mean, and which are actually used?|Accounts|Milestone 2|
