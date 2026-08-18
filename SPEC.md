@@ -1,0 +1,317 @@
+# HR Attendance — Spec
+
+What the system must do. Written in the language of the work.
+
+The database schema is not in this document. Claude Code decides tables from what is written here. §12 is the one exception — the device protocol is fixed by the firmware and cannot be redesigned.
+
+---
+
+## 1. What this replaces
+
+Today both HR and Accounts read the same punch card, at different times and at different detail.
+
+1. Employees punch a card. The machine prints red when the punch is outside schedule.
+2. **Daily:** HR reads the card and the leave forms, and fills the Daily Workers Attendance sheet by hand — a tick for present, the actual punch time when outside schedule, leave codes. Leave codes also get written onto the card.
+3. **At cut-off:** Accounts reads the punch card, and HR's reports where they help. **Accounts prioritises the card over the attendance sheet.**
+4. HR separately compiles the late coming and time-off summaries, signs them, and sends them to Accounts for deduction.
+
+**That duplication is the target.** One capture, read by both.
+
+**Payroll is not built here.** Accounts owns payroll in SQL Account. This system captures attendance and leave and hands it over.
+
+**Fully separate from Production Tracking** — separate codebase, separate database, no integration. Passports, ICs and medical certificates never enter that system.
+
+---
+
+## 2. Employees
+
+|Attribute|Notes|
+|---|---|
+|Employee number|**4 digits, zero-padded** — `0090`, `0657`, `1627`. Forms writing `090` are padded on entry. The padded form is authoritative|
+|Name||
+|Section|A column on the attendance sheet — PACK ASSY, QC, MAINT, PROJECT DOOR, WAREHOUSE and others|
+|Role|Row colour on the sheet — Management/Office, Production Assistant, HOD/Supervisor, QA/QC, Assistant Supervisor, Charge Hand|
+|Group|Decides schedule and break length|
+|Active and left dates|**Stored as dates, never a boolean**|
+|Device PIN|The device's own user identifier|
+
+- **`EMP-1001` is not used and never was.** The number Accounts and HR already print on every document wins.
+- **The employee number is stored exactly as given, with no padding applied on write.** A separate matching key handles the padding, so a wrong assumption about the format is corrected by remapping rows rather than by a schema change.
+- **A device PIN is not an employee number.** It is stored as a string, exactly as the device sends it, with no lookup at capture time.
+- **Employees are created in the application and pushed to the device**, never typed on the device.
+- Schedules and employment status are **effective-dated**. Re-rendering a past period uses the schedule and headcount that were in force then, not today's.
+
+---
+
+## 3. Attendance capture
+
+**The device records punches and nothing else.** It cannot record leave, gate pass or treatment slips. Those have their own entry paths and are never inferred from punch data.
+
+**Three layers, each rebuildable from the one above:**
+
+1. **Raw request** — every HTTP request from the device, stored whole and append-only. Never validated, never rejected, never deleted.
+2. **Parsed punches** — one row per punch line. Disposable: rebuilt by replaying the raw layer.
+3. **Daily attendance** — one row per employee per day. First in, last out, late minutes, status.
+
+**Every period total is a query over the daily rows.** Half-month, 16th-to-15th, calendar month — all of them. Unresolved period boundaries therefore cost nothing structural.
+
+**A parser change means replaying the raw layer, never re-collecting from the device.**
+
+### Corrections
+
+A missed, failed or wrong punch is corrected by **adding a row to a separate adjustment layer**. Punch data is never edited. Every derived figure is punches plus adjustments, and every adjustment carries who made it and why.
+
+**Two correction paths, and the difference matters:**
+
+|Path|Who|Time|Reasons available|
+|---|---|---|---|
+|**Guard entry** — biometric failed at the door|Security guard, in the application|**Server-stamped at the moment of entry. The guard cannot type a time and cannot backdate**|Biometric failed, not enrolled|
+|**Retroactive** — device down, forgotten punch|HR only|Entered|Any|
+
+**The guard records that the employee is standing in front of him. He does not record what the employee says happened earlier.** Without that rule, guard entry is buddy punching with a log — an employee names a favourable time and the guard types it. The log alone does not prevent it; removing the time field does.
+
+**Accepted residual risk:** a colluding guard can still enter a punch for an absent employee. Software cannot prevent that. But it is attributable to one named person, counted per employee, and cannot be backdated — against a punch card, where the same act is free, invisible and unattributable.
+
+**Every manual punch is marked on the generated sheet and counted per employee per period.** An unmarked manual punch is indistinguishable from a biometric one and recreates the hole the device exists to close. **A rising count for one employee means a bad enrollment or a process being worked around** — both need acting on.
+
+**No punch and an absence are not the same thing** and are never collapsed into one status. No punch is a fact; absence is an HR judgement.
+
+---
+
+## 4. Schedule, breaks and calendar
+
+Stored per group, effective-dated: start, end, break.
+
+|Value|Current setting|Confirmed?|
+|---|---|---|
+|Day shift|08:00–17:30|**Assumed** — start/end per group|
+|Night shift|19:30–04:30|From the sheet note|
+|Production break|12:30–13:15|From the sheet note|
+|Office break|12:30–13:30|From the sheet note|
+|Grace period|0 minutes|**Assumed** — grace period|
+|Rest day|Sunday|From the sheet legend|
+|Public holidays|Malaysia federal plus Melaka state|2026 list needed|
+
+**Break length differs by group, so shift assignment is per group, not global.**
+
+Public holidays and rest days shade whole columns on the sheet, driven by the calendar, never entered per employee.
+
+---
+
+## 5. Late coming and time off
+
+### Late coming
+
+- Late minutes accumulate across the period.
+- **Threshold: 30 minutes or more accumulated is deducted from salary.** Below 30 is exempt. Verified — an employee at exactly 30 minutes was deducted.
+- In force since July 2012 salary.
+- Produced as two documents: a per-half working summary, then a combined record signed by HR/Admin and Acct/Payroll.
+- Enters SQL Account as the `Lateness` hours field.
+
+**Showing a punch time and computing a deduction are separate things.** Displaying first in and last out needs nothing but punches. Computing late minutes needs only the scheduled start. **Applying a deduction needs the grace period, the threshold, and a management decision** — a figure on screen is not a deduction.
+
+### Time off
+
+- Gate pass records date, reason, from, to, hours taken, employee signature.
+- **The summary combines gate pass hours and medical treatment slip hours into one total per employee.**
+- Same 30-minute threshold, deducted from the next due salary.
+- Up to 5 treatment slips per employee per month appear on the summary.
+
+### Periods currently in use, which do not align
+
+|Item|Period|
+|---|---|
+|Late coming|16th → 15th|
+|Gate pass / time off|1st → month end|
+|Payroll entry|Half-month, 1–15 and 16–end|
+
+Cut-offs stated on the sheet: time off and late coming close on the 10th, salary and OT on the 15th, annual leave forms on the 20th. **Whether these are data periods or submission deadlines is unconfirmed.**
+
+---
+
+## 6. Leave
+
+**Leave is entered, never derived.** Today HR writes leave codes onto the punch card at the same moment as attendance. That one combined step becomes two separate ones.
+
+Codes from the sheet legend:
+
+|Code|Meaning|
+|---|---|
+|AL|Annual leave|
+|MC|Medical leave|
+|EL|Emergency leave|
+|UL|Unpaid leave|
+|PH|Public holiday|
+|AB|Absent — cut 3 times _(the calculation itself is unconfirmed)_|
+|SS|Suspended|
+|T / C|Temporary / Contract|
+
+- **Half-day leave exists** and is stored as a fraction.
+- **Leave naming is not a free choice** — every type must map onto SQL Account's Pay Days and No Pay Days codes.
+- A leave record carries its SQL Account code from the start, left empty until the mapping is answered.
+- **Entitlement rules, balances and approval are not designed.** Milestone 1 is entry only: employee, date or range, code.
+
+---
+
+## 7. The attendance sheet
+
+The Daily Workers Attendance sheet, in HR's existing layout.
+
+- **Generated output. Regenerated on demand. Never annotated by hand or edited in place.** A sheet HR writes on cannot be regenerated without losing what they wrote, and leaves that data invisible to everything downstream.
+- Everything on it comes from stored data: punches, corrections, leave, schedule, calendar.
+- A cell holds **a tick when the punch is on schedule, the actual punch time when it is outside schedule**, or a leave code.
+- Rest days and public holidays shade as whole columns.
+- Manual punches are marked.
+
+**Per-day punch detail is available for any employee and day.** This is what replaces reading the punch card — for HR and for Accounts both.
+
+---
+
+## 8. Accounts export
+
+One record per employee per half-month, matching the SQL Account payroll entry screen field for field.
+
+**Pay Days:** `DW` `PH` `AL` `MC` `MT` `MR` `CL` `HL` `EX` `PT` `AD` **No Pay Days:** `LS` `NPL` `AB` **Overtime (hours):** 1.0 · 1.5 · 2.0 · 3.0 — **(days):** R/D & P/H, Public Holiday **Hours:** Work Hours · Lateness · Early Departure · No Pay Hour **Other:** OOB (days) · Working Days · Basic Rate
+
+- The Hours block and Overtime come from punches. Pay Days and No Pay Days come from leave records.
+- **Whether SQL Account imports a file or is keyed by hand is unknown.** Until answered, the deliverable is a screen-and-print summary in the entry screen's field order.
+- **Overtime has no known source.** The device shows time present, which is not approved overtime. An input path may be needed and is not yet planned.
+
+---
+
+## 9. Assumed values
+
+Built on, demonstrated, and corrected from what HR says when they see it working. Each one has a matching question in BUILD.md's parked list. **Every one is a row in a table. Correcting one is an update, not a code change.**
+
+|#|Assumed|
+|---|---|
+|A1–A2|Day shift 08:00–17:30|
+|A4|Grace period 0 minutes|
+|A7|Work hours = time present minus break|
+|A8|Late coming period runs 16th → 15th|
+|A9|Time off period runs 1st → month end|
+|A10|Payroll halves are 1–15 and 16–end|
+|A11|Late deduction threshold ≥30 min, inclusive|
+|A12|Threshold applies to the combined 16→15 total|
+|A13|Time off threshold ≥30 min, gate pass and slips combined|
+|A14|Leave codes AL, MC, EL, UL, PH, AB, SS|
+|A15|Half day stored as 0.5|
+|A19|Device PIN equals the employee number|
+|A21|The device pushes the PIN with leading zeros intact|
+|A25|The guard can reach the application where failures happen|
+|A26|The handshake answers these options: Stamp, OpStamp, ErrorDelay, Delay, TransTimes, TransInterval, TransFlag, TimeZone, Realtime, Encrypt|
+|A27|An ATTLOG body decodes as UTF-8, else GBK, else Latin-1|
+
+**Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 and A21 are both isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
+
+A26 and A27 are the two the receiver itself runs on. §12 fixes that the handshake answers `Key=Value` lines and that names are GBK on many builds; it does not fix which options or which encoding. Both are rows, so the first real handshake and the first real body correct them with an UPDATE.
+
+---
+
+## 10. Device configuration
+
+- **Face and fingerprint only.** PIN-alone and card verification disabled. Punch cards are currently shared between employees; a PIN or a card reproduces that, a biometric does not. The PIN still exists as the device's user identifier — what is disabled is the PIN as a credential.
+- **A super administrator is registered before deployment.** Until one exists the device menu is open to anyone who walks up to it, and the verify mode or the server address can be changed by hand.
+- **The device has one Cloud Server setting and this system holds it.** ZKTeco's own software competes for the same setting — whichever holds it receives the pushes and the other receives nothing. Their software may be used once for bulk enrollment, then the address is repointed here. It is not installed, licensed or maintained as part of the running system.
+- **If anyone repoints that setting, capture stops silently while the device keeps recording locally.** The ingestion alert is the only thing that catches it. Record the correct value somewhere findable.
+- Device timezone +8. Clock drift corrupts lateness directly — compare the device's time against the server's arrival time to detect it.
+
+### Fallback when biometrics fail
+
+**The application path is primary** — guard entry, attributable, reason-coded, un-backdatable.
+
+**A shared device password is not allowed as the primary mechanism.** A static secret typed at a wall-mounted terminal, in front of a queue, repeatedly, over months, will be observed. Once one employee knows it, any employee can punch for any other by keying an ID and that password — no card to borrow, no accomplice. Cheaper than the buddy punching this system exists to stop, and the device records only that the method was a password, not who authorised it.
+
+**Permitted only as an interim bridge, and only if the guard has no screen where failures happen.** Conditions, all of them:
+
+- Enrolled only for employees whose biometrics actually fail. Never all staff.
+- A password-punch count per employee per period runs from day one.
+- Rotated whenever password punches spread to employees with no enrollment problem.
+- Retired once the guard has application access.
+
+**A fallback password is temporary.** A failed biometric puts the employee on a pending re-enrollment list; the password is cleared remotely once re-enrollment succeeds. **A password never cleared is the permanent shared secret this rules out.**
+
+---
+
+## 11. Device commands
+
+Employee records are pushed to the device from the application. The device asks for pending commands and reports each result back.
+
+Used for: creating and updating user records, setting and clearing a fallback password, deleting users. Biometric templates are still captured physically at the device.
+
+**A user update replaces the whole record.** Payloads are built from the full record captured from the device. Sending a partial record wipes name, privilege, group and card.
+
+**Password payloads are plaintext over an unauthenticated endpoint.** Purged on completion, never logged. A further reason the receiver stays on the LAN.
+
+Command strings are unverified and get pinned during the first real device capture. The queue itself does not depend on them.
+
+---
+
+## 12. The device protocol — fixed, not designed
+
+**This section is not a design. It is what the firmware does.** It is here because getting it wrong makes the device retry forever or drop a batch of punches silently.
+
+The device is the HTTP client. It pushes; we never poll. All routes under `/iclock/`.
+
+|Route|Response body|
+|---|---|
+|`GET /iclock/cdata?SN=&options=all&pushver=&language=`|`GET OPTION FROM: {SN}` then `Key=Value` lines|
+|`POST /iclock/cdata?SN=&table=ATTLOG&Stamp=`|`OK: {n}`|
+|`POST /iclock/cdata?SN=&table=OPERLOG&Stamp=`|`OK`|
+|`GET /iclock/getrequest?SN=`|`OK`, or `C:{id}:{CMD}`|
+|`POST /iclock/devicecmd?SN=`|`OK`|
+|`POST /iclock/cdata?SN=&table=ATTPHOTO`, `POST /iclock/fdata`|`OK`|
+|catch-all `/iclock/{rest:path}`|`OK`|
+
+Punch line, tab-separated: `pin, YYYY-MM-DD HH:MM:SS, status, verify, workcode, reserved, reserved`
+
+**Status and verify code meanings are unverified. Do not build logic on them.** The verify field does show which method was used, which is what the password-punch count reads.
+
+**Nothing in this section has been verified against the device.** The vendor spec is not in hand, and no capture has ever been taken. The table is assembled from ZKTeco documentation and community reports — treat every line as unconfirmed.
+
+**Raw capture is what makes building on it acceptable.** Every request is stored whole before anything parses it, so a wrong assumption costs a replay rather than lost punches. **This is the reason the raw layer exists, and why it is never validated or filtered.**
+
+Verify against real traffic at first power-on, then against the vendor spec when it arrives, and update this table in the same task.
+
+**Absolute rules on `/iclock/` routes**
+
+- **Return only `200` and plain text.** A redirect, a `401`, or an HTML error page makes the firmware retry forever or drop the batch.
+- Trailing-slash redirects are on by default in the framework and must be turned off — **and the catch-all route kept. Neither alone is enough.**
+- No exception handler that returns JSON. No request-body validation — bodies are tab-separated text or raw binary, and a validation failure produces an error status.
+- **No auth middleware.** The protocol has no credential mechanism. Access control is network position: device on an isolated segment, firewall permitting only its address, serial-number allowlist that logs unknown serials and still returns `200 OK`. Plain HTTP.
+- **Never routed through the tunnel, never exposed beyond the LAN.**
+- **Never decode the body at capture.** Store bytes — name fields are GBK on many firmware builds. Decode in the parser.
+- **A parse failure never affects the response.** Store, respond `OK`, log it.
+- **Never deduplicate, normalise or drop anything at the raw layer.** Devices re-push after a timeout. Deduplicate downstream.
+
+---
+
+## 13. Not allowed
+
+|Never|Because|
+|---|---|
+|Editing punch data to fix a bad punch|Corrections are separate rows|
+|Resolving a device PIN to an employee at capture|Store the string; map downstream|
+|Hand-editing the generated attendance sheet|It cannot then be regenerated|
+|Collapsing "no punch" and "absent"|One is a fact, the other a judgement|
+|A guard-typed punch time|Server-stamped only|
+|An unmarked manual punch|It must be visibly countable|
+|A fallback password left in place after re-enrollment|That is the permanent shared secret|
+|Logging or retaining a password payload|Purge on completion|
+|Hard-coding a schedule, grace period, threshold, period boundary, leave code or holiday|These are rows|
+|Padding or stripping the employee number on write|Stored verbatim; a separate key does the matching|
+|A partial user update to the device|It wipes the whole record|
+|Building overtime|Its source is unknown|
+|Designing leave entitlements, the export format, the government-application field set, or reports|Blocked on HR. Stop and say so|
+|Storing passport, IC or medical certificate data|Privacy handling undecided|
+|Assuming ZKTeco software can run alongside this|One server setting, and this system holds it|
+
+---
+
+## 14. Environment
+
+- Python/FastAPI managed with **uv** · React + Tailwind · PostgreSQL · Docker Compose
+- **On-premises, and this is a requirement rather than a preference** — the device pushes over the LAN and cannot reach a cloud host.
+- Remote access by tunnel, **for the HR interface only**. Never the device routes.
+- Server-observed times are stored with timezone. Device-reported times are stored as the device sent them, alongside the original string, **never converted on the way in**.
+- **No migrations until real punches arrive** (see BUILD.md). Until then the database is dropped and recreated.
