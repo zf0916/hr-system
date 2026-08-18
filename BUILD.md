@@ -110,9 +110,7 @@ Verified on the compose stack: a full cycle clean, a second cycle clean against 
 
 **The device is on site.** Power adapter pending.
 
-Artifacts received and analysed: daily attendance sheet, late coming summary and deduction record, individual time-off record, time-off salary summary, SQL Account payroll entry screen, **leave card**.
-
-The leave card is HR's per-employee leave ledger — a header of name, number, department, date joined and entitlement, then one line per leave taken: date of application, from, to, number of days. Balance, comments and remarks are marked for office use. It has no leave type column, no approver and no signature, and 22 ruled lines. It is an output HR keeps by hand, not an input: **there is nothing to import from it, and the file is not in the repo** — it carries a real employee's name and join date, and the privacy question is still open. No fixture was made from it. What it settled is in SPEC §6 and §2.
+Artifacts received and analysed: daily attendance sheet, late coming summary and deduction record, individual time-off record, time-off salary summary, SQL Account payroll entry screen, **leave card** — HR's per-employee leave ledger, kept by hand and not in the repo, since it carries a real employee's name and join date. What it settled is in SPEC §6 and §2.
 
 **Nothing in the protocol contract has been verified against the device** — see SPEC.md §12. The simulator therefore tests that the receiver behaves as the contract says, not that the contract is right. Only real traffic settles that.
 
