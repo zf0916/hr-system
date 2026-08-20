@@ -64,6 +64,8 @@ Today both HR and Accounts read the same punch card, at different times and at d
 
 **A parser change means replaying the raw layer, never re-collecting from the device.**
 
+**The device's USB export is not a second format and does not shape any of this.** It is ATTLOG — the same punch lines already arriving over HTTP, from the same device, with the same fields (§10, §12). So a recovery path is a loader into the raw layer and a replay, not a storage design. **And the daily row carries what the device has never heard of:** which attendance day a punch belongs to, which employee a PIN was, the corrections sitting beside the punches, and the schedule that was in force on that date. Shaping storage to match a flat punch dump would throw all four away.
+
 ### Corrections
 
 A missed, failed or wrong punch is corrected by **adding a row to a separate adjustment layer**. Punch data is never edited. Every derived figure is punches plus adjustments, and every adjustment carries who made it and why.
@@ -318,7 +320,9 @@ A34 comes from the option push, and it contradicts the datasheet by orders of ma
 |HTTPS|Disabled|
 |Cloud server|The receiver, plain HTTP, **port 8081**|
 
-Capacity, from the manufacturer's datasheet: 8,000 users · 8,000 fingerprint templates · 6,000 face templates · 200,000 transaction records · user ID up to 14 digits. **Headcount is not a constraint.** The device's own option push reports far smaller numbers, which is §9 A34.
+Capacity, from the manufacturer's datasheet: 8,000 users · 8,000 fingerprint templates · 6,000 face templates · 200,000 transaction records · user ID up to 14 digits. **Headcount is not a constraint**, and **200,000 transaction records is years of buffering rather than days** — which is what makes an outage survivable (§12). The device's own option push reports far smaller numbers, which is §9 A34.
+
+**The device has USB export and USB upload.** Export is a manual recovery path if the receiver is permanently lost, and upload may make bulk enrollment materially faster — the person at the desk then captures only the biometric. Neither is a second ingest path, and what the menus actually offer is unread; BUILD.md parks it.
 
 **The device refuses a leading zero in a user ID.** Observed at enrollment. `0090` cannot be a PIN; §2 and the dated device-user mapping are where that is handled.
 
@@ -435,6 +439,8 @@ What is still not settled:
 - **Fields five to ten of the punch line**, which have only ever been `0`.
 
 **Raw capture is what makes building on it acceptable.** Every request is stored whole before anything parses it, so a wrong assumption costs a replay rather than lost punches. **This is the reason the raw layer exists, and why it is never validated or filtered.**
+
+**The device deletes a record only once the server answers `OK`, and it buffers and re-pushes while the server is unreachable.** That is what makes the order in this section load-bearing: **store first, answer second.** An `OK` is a receipt, and a server that answers before storing has told the device to forget something nobody kept — which is exactly what the first capture did (above). It also means **an outage is not data loss**: the device holds the records and re-pushes them on reconnect, up to a transaction capacity of 200,000 (§10), which is years of punching rather than days. **What an outage costs is knowing about it** — the device retries quietly, so silence is the only symptom, and the ingestion alert is the thing that turns silence into a warning.
 
 **Absolute rules on `/iclock/` routes**
 

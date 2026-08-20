@@ -173,7 +173,29 @@ Through the receiver, kept as `raw_request` 96–115. Every line here can be che
 - **The suppression interval's value**, which has not been read off the device menu.
 - **A34**, the small `~Max...` numbers in the option push.
 
-**Still owed at the device menus:** register the super administrator, set verify mode to face and fingerprint only, check whether USB user import exists.
+**Still owed at the device menus, next time it is in reach:**
+
+- **Whether exporting also clears records from the device.** This is the only real risk in the USB question — exporting casually during the parallel run would destroy the re-push safety net.
+- The export file shape: tab-separated ATTLOG, or a `.dat`/`.csv` variant.
+- Whether the export includes biometric templates or user records only.
+- Whether USB import overwrites or merges existing enrollments. **Bulk-loading employee records makes enrollment materially faster** — the person at the desk then captures only the biometric — and it is step 8's fallback if the command queue turns out awkward on this firmware.
+- The repeat-verification suppression interval (parked above).
+- Register the super administrator. Set verify mode to face and fingerprint only.
+
+---
+
+## The outage test — five minutes, and it is step 9's gate
+
+The device buffers when the receiver is unreachable and re-pushes on reconnect, deleting a record only once the server answers `OK` (SPEC §12). **That is settled by the protocol's shape rather than by evidence, and five minutes settles it with evidence:**
+
+    docker compose stop api
+    # punch several times, wait
+    docker compose start api
+    hr raw --serial PYA8262300072 --since-id <last>
+
+Punches arriving after the restart confirms it. 200,000 transaction records is years of buffer (SPEC §10), so an outage of any plausible length is not data loss.
+
+**The real gap is not data loss — it is not knowing.** The device retries quietly, so a receiver that has been down since Tuesday looks exactly like a factory where nobody punched. Nobody finds out until a sheet has holes in it. **That is step 9**, and this test is the gate it has to pass: silence for N hours raises a warning.
 
 ---
 
@@ -283,6 +305,7 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |Which encoding does this firmware send ATTLOG and OPERLOG bodies in (SPEC §9 A27)? **Both captures were ASCII end to end with an empty Name field. It settles the first time a non-Latin name is enrolled on the device, not before**|The first non-Latin enrollment|Nothing structural — it is a row|
 |**What would a real `Stamp` / `OpStamp` cursor change?** Ours is a row fixed at `9999` and the device echoes it back; it costs nothing today because the device deletes each record once acknowledged (SPEC §12)|ZKTeco supplier|Nothing yet|
 |**Read the repeat-verification interval off the device menu** (SPEC §10). It is the floor on how close two genuine punches can be, which matters for a gate pass return|Zi Fong, at the device|Daily attendance, time off|
+|**USB export from the device as a manual recovery path if the receiver is permanently lost.** Not a second ingest path — the device buffers and re-pushes across outages. The export is the same ATTLOG records the device pushes, so a fallback is a loader into the raw layer plus a replay, not a format to design around. Unread: the exact file shape, whether biometric templates are included, whether import overwrites or merges, and **whether exporting also clears records from the device**|Zi Fong, at the device|Nothing — recovery only|
 |**Are `~MaxAttLogCount=20`, `~MaxUserCount=80` and `~MaxFingerCount=80` per-push batch limits or storage limits** (SPEC §9 A34)? They contradict the datasheet by orders of magnitude|ZKTeco supplier, or the first push of users|Step 8, pushing users to the device|
 |**What does the sheet show for a day with one punch** (SPEC §9 A35)? The row records a first in and no last out, because a single punch cannot say which it was|HR|The sheet, step 7|
 |**Are late minutes empty or zero on a rest day, a closed holiday and a day with no punch** (SPEC §9 A36)? The row leaves them empty, so a period total cannot mistake a rest day for punctuality|HR, then Accounts|Milestone 3 totals|
