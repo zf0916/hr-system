@@ -38,6 +38,7 @@ Today both HR and Accounts read the same punch card, at different times and at d
 - **`EMP-1001` is not used and never was.** The number Accounts and HR already print on every document wins.
 - **The employee number is stored exactly as given, with no padding applied on write.** A separate matching key handles the padding, so a wrong assumption about the format is corrected by remapping rows rather than by a schema change.
 - **A device PIN is not an employee number.** It is stored as a string, exactly as the device sends it, with no lookup at capture time.
+- **The device refuses a leading zero in a user ID** (§10, observed). So a PIN can never be `0090`, and the padded employee number is not usable as a PIN as it stands. The dated device-user mapping is what joins the two, which is why this costs nothing: it is rows, not a format to agree on.
 - **Employees are created in the application and pushed to the device**, never typed on the device.
 - Schedules and employment status are **effective-dated**. Re-rendering a past period uses the schedule and headcount that were in force then, not today's.
 - **The leave card's and the leave application form's "Department" is the attendance sheet's Section.** One field, under two names on three pieces of paper — not a second attribute.
@@ -258,19 +259,21 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A13|Time off threshold ≥30 min, gate pass and slips combined|
 |A14|Leave codes AL, MC, EL, UL, PH, AB, SS — the sheet legend, now known to be an incomplete list: four form types have no code at all (§6)|
 |A15|Half day stored as 0.5|
-|A19|Device PIN equals the employee number|
-|A21|The device pushes the PIN with leading zeros intact|
+|A19|Device PIN equals the employee number — **it cannot be the padded form: the device refuses a leading zero (§10), so a padded number and its PIN differ by that zero**|
 |A25|The guard can reach the application where failures happen|
-|A26|The handshake answers these options: Stamp, OpStamp, ErrorDelay, Delay, TransTimes, TransInterval, TransFlag, TimeZone, Realtime, Encrypt|
-|A27|An ATTLOG body decodes as UTF-8, else GBK, else Latin-1|
+|A26|**What we answer the handshake with** — Stamp, OpStamp, ErrorDelay, Delay, TransTimes, TransInterval, TransFlag, TimeZone, Realtime, Encrypt — is accepted and acted on. Still untested|
+|A27|An ATTLOG body decodes as UTF-8, else GBK, else Latin-1. Still open: the captured bodies decoded as UTF-8 cleanly, but every field in them was ASCII and Name was empty|
 |A28|An employee number's matching key is the number padded on the left to 4 characters with zeros|
 |A29|An employee number is exactly 4 digits; anything else stops an import until it is accepted deliberately|
 |A30|A punch belongs to an attendance day if it falls within 240 minutes before that day's shift start or 240 minutes after its end|
 |A31|Which group runs which shift — DAY-PROD day, NIGHT-PROD night, OFFICE day with the office break|
 |A32|The site's timezone is Asia/Kuala_Lumpur, and a guard entry's server stamp is read as a local punch time through it|
 |A33|A device punch belongs to the employee its PIN mapped to on the punch's own date, and to the group that employee was in on that date|
+|A34|`~MaxAttLogCount=20`, `~MaxUserCount=80` and `~MaxFingerCount=80` in the device's option push are **per-push batch limits, not storage limits**|
 
-**Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 and A21 are both isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
+**Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 is isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
+
+**A21 — "the device pushes the PIN with leading zeros intact" — is answered and gone.** The question never arises: the device refuses to accept a leading zero in a user ID at all (§10). The mapping absorbed it with no code change, which is what §13's rule against resolving a PIN at capture was for.
 
 A32 and A33 are what turn a correction and a device punch into rows about the same person on the same day. A32 is a row; A33 is the date the mapping is read on, and it matters only when a PIN is reassigned or an employee changes group mid-shift.
 
@@ -278,11 +281,32 @@ A30 is the width of the attendance-day window, and it is per schedule row. It is
 
 A28 and A29 are the employee number's shape and its key. §2 settles that the stored number is never padded or stripped and that a separate key does the matching; it does not settle what a number may look like, and BUILD.md parks that question. Both are rows, so correcting them is an UPDATE and a rekey — no stored number is touched.
 
-A26 and A27 are the two the receiver itself runs on. §12 fixes that the handshake answers `Key=Value` lines and that names are GBK on many builds; it does not fix which options or which encoding. Both are rows, so the first real handshake and the first real body correct them with an UPDATE.
+A26 and A27 are the two the receiver itself runs on, and **the first capture answered neither.** A26 is what *we* send the device in the handshake reply; the script that took the capture sent nothing at all, and the device pushing its own option set to us (`table=options`, §12) is the opposite direction and does not answer it. A27 stayed untested for want of a non-ASCII byte. Both are rows, so a conforming handshake and the first body with a real name in it correct them with an UPDATE.
+
+A34 comes from that same option push, and it contradicts the datasheet by orders of magnitude — 20 attendance records against 200,000, 80 users against 8,000. Reading the small numbers as how much the device moves in one exchange, rather than how much it can hold, is the assumption. **It matters at step 8, where users are pushed to the device**: a batch limit means chunking the queue, a storage limit would mean the device cannot hold the workforce. The datasheet says it can.
 
 ---
 
 ## 10. Device configuration
+
+### The device, as it now stands
+
+|What|Value|
+|---|---|
+|Model|SenseFace 4A|
+|Serial|`PYA8262300072`|
+|Platform|`ZAM70_TFT`|
+|Firmware|`ZAM70-NF43VA-Ver3.3.12`|
+|Push version|`Ver 3.1.2S-20250616`|
+|Protocol|**Switched from BEST to PUSH (ADMS)**|
+|HTTPS|Disabled|
+|Cloud server|The receiver, plain HTTP, **port 8081**|
+
+Capacity, from the manufacturer's datasheet: 8,000 users · 8,000 fingerprint templates · 6,000 face templates · 200,000 transaction records · user ID up to 14 digits. **Headcount is not a constraint.** The device's own option push reports far smaller numbers, which is §9 A34.
+
+**The device refuses a leading zero in a user ID.** Observed at enrollment. `0090` cannot be a PIN; §2 and the dated device-user mapping are where that is handled.
+
+### Rules
 
 - **Face and fingerprint only.** PIN-alone and card verification disabled. Punch cards are currently shared between employees; a PIN or a card reproduces that, a biometric does not. The PIN still exists as the device's user identifier — what is disabled is the PIN as a credential.
 - **A super administrator is registered before deployment.** Until one exists the device menu is open to anyone who walks up to it, and the verify mode or the server address can be changed by hand.
@@ -327,25 +351,41 @@ Command strings are unverified and get pinned during the first real device captu
 
 The device is the HTTP client. It pushes; we never poll. All routes under `/iclock/`.
 
-|Route|Response body|
-|---|---|
-|`GET /iclock/cdata?SN=&options=all&pushver=&language=`|`GET OPTION FROM: {SN}` then `Key=Value` lines|
-|`POST /iclock/cdata?SN=&table=ATTLOG&Stamp=`|`OK: {n}`|
-|`POST /iclock/cdata?SN=&table=OPERLOG&Stamp=`|`OK`|
-|`GET /iclock/getrequest?SN=`|`OK`, or `C:{id}:{CMD}`|
-|`POST /iclock/devicecmd?SN=`|`OK`|
-|`POST /iclock/cdata?SN=&table=ATTPHOTO`, `POST /iclock/fdata`|`OK`|
-|catch-all `/iclock/{rest:path}`|`OK`|
+|Route|Response body|Seen|
+|---|---|---|
+|`GET /iclock/cdata?SN=&options=all&pushver=&language=`|`GET OPTION FROM: {SN}` then `Key=Value` lines|Observed. The query also carries `DeviceType=att` and `PushOptionsFlag=1`|
+|`POST /iclock/cdata?SN=&table=ATTLOG&Stamp=`|`OK: {n}`|Observed. `Stamp=`, as written|
+|`POST /iclock/cdata?SN=&table=OPERLOG&OpStamp=`|`OK`|Observed. **`OpStamp=`, not `Stamp=`** — the two tables name their cursor differently|
+|`GET /iclock/getrequest?SN=`|`OK`, or `C:{id}:{CMD}`|Observed. **The first poll after a handshake also carries `INFO=`** — firmware version, the device's IP, and record counts|
+|`POST /iclock/cdata?SN=&table=options`|`OK`|Observed, and **not in any material in hand**: the device POSTs its whole option set to us|
+|`POST /iclock/cdata?SN=&table=BIODATA`|`OK`|Observed, and also undocumented here: biometric templates, base64|
+|`POST /iclock/devicecmd?SN=`|`OK`|Not seen — nothing was queued|
+|`POST /iclock/cdata?SN=&table=ATTPHOTO`, `POST /iclock/fdata`|`OK`|Not seen|
+|catch-all `/iclock/{rest:path}`|`OK`|**This is what absorbed `options` and `BIODATA`** — see below|
+
+**Two tables arrived that this section did not name, and nothing had to be built for them.** `options` and `BIODATA` were answered `OK` by a fall-through and stored whole. In the receiver that fall-through is `POST /iclock/cdata`'s unrecognised-table branch rather than the catch-all route itself, but it is the same rule doing the work: **an undocumented table or route still gets `200 OK` and still lands in the raw layer.** That is exactly what the catch-all exists for, and it earned its place the first time real traffic arrived.
 
 Punch line, tab-separated: `pin, YYYY-MM-DD HH:MM:SS, status, verify, workcode, reserved, reserved`
 
-**Status and verify code meanings are unverified. Do not build logic on them.** The verify field does show which method was used, which is what the password-punch count reads.
+**The verify field shows the method. Confirmed physically: `15` face, `1` fingerprint** — both tested at the device. This is the field the password-punch count reads (§10).
 
-**Nothing in this section has been verified against the device.** The vendor spec is not in hand, and no capture has ever been taken. The table is assembled from ZKTeco documentation and community reports — treat every line as unconfirmed.
+**Status was `255` on every punch, and that is settled rather than unverified.** The device is not labelling in versus out. Punch state options are off by default on this model and are staying off, so **first in and last out come from the times alone** — which is what §3 already does. Nothing downstream reads status.
 
-**Raw capture is what makes building on it acceptable.** Every request is stored whole before anything parses it, so a wrong assumption costs a replay rather than lost punches. **This is the reason the raw layer exists, and why it is never validated or filtered.**
+### What has been captured, and how far it can be trusted
 
-Verify against real traffic at first power-on, then against the vendor spec when it arrives, and update this table in the same task.
+**Real traffic from the device has been captured, and every line above marked _Observed_ comes from it** — the device in §10, serial `PYA8262300072`.
+
+**It was observed once, against a non-conforming server, and it is not fully authoritative.** The capture was taken with a throwaway FastAPI script outside this repo, not the receiver. It answered the handshake with a bare `OK` instead of the `Key=Value` option lines this section specifies. The device carried on and pushed everything anyway, using `Stamp=9999` and `OpStamp=9999` — placeholders, because no stamp was ever issued. **The script answered `OK` to those pushes as well, so the device cleared the records from its own memory, and nothing reached the raw layer.** Those punches, operations and templates are gone.
+
+What that separates:
+
+- **Facts about this firmware:** the routes, the query parameters, the two extra tables, the verify codes, the status value.
+- **Not facts:** the stamp values. `9999` is what the device sends when no stamp was ever issued, and says nothing about what it sends against a server that issues one.
+- **Not tested at all:** the handshake reply (§9 A26) — the script sent no options — and any non-ASCII body (§9 A27).
+
+One device, one session. The vendor spec is still not in hand. **The re-capture that matters is through the receiver, which answers the handshake as this section specifies and keeps every request in the raw layer** — and this section gets updated in the same task.
+
+**Raw capture is what makes building on it acceptable.** Every request is stored whole before anything parses it, so a wrong assumption costs a replay rather than lost punches. **This is the reason the raw layer exists, and why it is never validated or filtered.** The first capture is the argument for it: a server that stores nothing let the device throw its own records away.
 
 **Absolute rules on `/iclock/` routes**
 

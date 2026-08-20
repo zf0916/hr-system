@@ -28,9 +28,10 @@ services:
       # Never routed through the tunnel (SPEC.md §12).
       #
       # This port is half of the device's Cloud Server Setting, so it is a value
-      # that has to be recorded and kept (SPEC.md §10). 8000 is taken on this
-      # host by Production Tracking, which stays separate from this system.
-      - "${RECEIVER_PORT:-8080}:8000"
+      # that has to be recorded and kept (SPEC.md §10). The device is already
+      # pointed at 8081. 8000 is taken on this host by Production Tracking and
+      # 8080 by another project; both stay separate from this system.
+      - "${RECEIVER_PORT:-8081}:8000"
     volumes:
       # The importer reads spreadsheets from the host. `fixtures` is the
       # committed sample; `import` is where HR's real list goes, and is not

@@ -350,7 +350,8 @@ def check_db(sim: Sim, baseline: int) -> None:
             f"SELECT count(*) FROM parsed_punch WHERE {punches} AND pin = '0090'",
             (baseline,),
         )
-        sim.check(cur.fetchone()[0] > 0, "leading zeros kept exactly as sent (A21)")
+        sim.check(cur.fetchone()[0] > 0,
+                  "a PIN is stored exactly as sent, zeros and all (SPEC §12, §13)")
 
         cur.execute(
             f"SELECT punch_time::text, punch_time_text FROM parsed_punch "

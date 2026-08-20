@@ -76,7 +76,7 @@ Run it:
 
     docker compose up -d --build
     docker compose exec api hr seed            # drops, recreates and seeds — one command
-    uv run python tools/adms_sim.py --port 8080  # must exit 0
+    uv run python tools/adms_sim.py --port 8081  # must exit 0
     docker compose exec api hr replay          # rebuild parsed punches from the raw layer
 
     docker compose exec api hr employees import /srv/fixtures/employees_sample.xlsx \
@@ -94,6 +94,10 @@ Run it:
 
     uv run python tools/corrections_gate.py   # must exit 0
 
+    hr raw --limit 20                         # what arrived, when, from which
+    hr raw --serial PYA8262300072 --body      #   serial, which table, and the
+    hr raw --id 26                            #   bytes. It parses nothing
+
     hr corrections guard --employee 0090 --reason biometric_failed --by "Guard: ..."
     hr corrections retroactive --employee 0090 --at "2026-08-17 08:05:00" \
         --reason "device down" --by "HR: ..."
@@ -106,31 +110,39 @@ HR's real list goes in `import/`, which is not committed. The importer is told w
 
 Verified on the compose stack: a full cycle clean, a second cycle clean against the database the first one filled, capture surviving `docker compose down` and back up, and the replay running in the container.
 
-**The receiver's host port is `RECEIVER_PORT`, default 8080.** Not 8000 — Production Tracking already holds that on this host, and the two stay separate. This port is half of the device's Cloud Server Setting, so changing it means changing the setting on the device.
+**The receiver's host port is `RECEIVER_PORT`, now 8081** — the device is already pointed there. Not 8000, which Production Tracking holds on this host, and not 8080, which belongs to another project; all three stay separate. This port is half of the device's Cloud Server Setting, so changing it again means changing the setting on the device.
 
-**The device is on site.** Power adapter pending.
+**The device is on site, powered, on the LAN, and has pushed real traffic.** SenseFace 4A, serial `PYA8262300072`, protocol switched from BEST to PUSH (ADMS), HTTPS off, cloud server pointed at port 8081. The full identity, firmware and capacities are in SPEC §10.
+
+**The first capture is not in the raw layer, and cannot be.** It was taken with a throwaway FastAPI script outside this repo, which answered every push `OK` — so the device cleared those records from its own memory and nothing was stored. What the traffic settled is written into SPEC §12, line by line, marked observed once against a non-conforming server. **The re-capture that matters runs the receiver itself:** it answers the handshake as §12 specifies and stores every request whole, so the next capture is keepable. `hr raw` reads it.
+
+What the first capture settled: OPERLOG names its cursor `OpStamp`, the handshake query carries `DeviceType` and `PushOptionsFlag`, the first `getrequest` after a handshake carries `INFO`, two undocumented tables (`options` and `BIODATA`) arrive and are absorbed harmlessly, verify is 15 for face and 1 for fingerprint, and status is 255 on every punch — the device does not label in versus out, and first-in/last-out from times is settled rather than assumed.
+
+**A21 is answered and deleted** (SPEC §9): the device refuses a leading zero in a user ID, so the question of whether it pushes `0090` or `90` never arises. No code changed — §13 and the dated device-user mapping already covered it.
+
+**The device is already reaching the receiver.** With the stack up on 8081 it polls `GET /iclock/getrequest?SN=PYA8262300072` every few seconds — `iClock Proxy/1.09`, `Host: 192.168.60.50:8081` — and every poll is in the raw layer, readable with `hr raw`. **Nothing else has arrived from it yet**: no handshake since the receiver came up, so no option lines have been answered and A26 is still untested, and no punches, so the parsed layer holds only simulator rows.
 
 Artifacts received and analysed: daily attendance sheet, late coming summary and deduction record, individual time-off record, time-off salary summary, SQL Account payroll entry screen, **leave card** — HR's per-employee leave ledger, kept by hand and not in the repo, since it carries a real employee's name and join date. What it settled is in SPEC §6 and §2.
 
 **Leave application form** — the two leave vocabularies and the approval chain, SPEC §6. **Gate pass** — category, destination, out and in times, four signatures, and who fills the times, SPEC §5. Both were photographed blank, with no employee data on them, and **the photographs are not in the repo**: they are not source, and what they settled is in SPEC.
 
-**Nothing in the protocol contract has been verified against the device** — see SPEC.md §12. The simulator therefore tests that the receiver behaves as the contract says, not that the contract is right. Only real traffic settles that.
+**Most of the protocol contract is now observed once, and none of it twice** — see SPEC.md §12, where each line says which. The simulator still only tests that the receiver behaves as the contract says, not that the contract is right.
 
 ---
 
-## When the adapter arrives — a gate on §12 and the parser only
+## The re-capture — a gate on §12 and the parser only
 
 **Nothing else waits for it.** Steps 2 onward are built without the device; the simulator stands in for it.
 
-Ten minutes of real traffic converts every unverified line in SPEC.md §12 into fact, and the parser then gets written against real bytes.
+The first capture converted most of SPEC.md §12 into observed fact, but stored nothing (above). **The re-capture runs the receiver, which keeps what arrives.**
 
-1. Run the receiver on a laptop on the same LAN.
-2. Point the device at it — COMM → Cloud Server Setting. Server IP, port, plain HTTP.
-3. Punch a few times and capture.
+1. Run the receiver on the LAN, port 8081 — where the device already points.
+2. Punch a few times, face and fingerprint both.
+3. `hr raw` to watch it land, then `hr replay` to rebuild the parsed layer from it.
 
-**Enroll one employee with a leading-zero number first** and confirm whether the device pushes `0090` or `90`. That answers A21 before anyone enrolls everyone.
+What only a conforming handshake can settle: **whether the device accepts and acts on the option lines the receiver sends** (SPEC §9 A26), and **what stamp values it then uses** — `Stamp=9999` and `OpStamp=9999` were placeholders because the throwaway script issued none. A body with a non-ASCII name in it settles A27; nothing captured so far had one.
 
-While in the menus: register the super administrator, set verify mode to face and fingerprint only, check whether USB user import exists.
+Still owed at the device menus: register the super administrator, set verify mode to face and fingerprint only, check whether USB user import exists.
 
 ---
 
@@ -162,7 +174,7 @@ Code being ready is not the gate. These are.
 **Prepare**
 
 - Device mounted, powered, on the LAN at a fixed address.
-- **Cloud Server address points here and stays here.** Record the correct value somewhere findable. The port is `RECEIVER_PORT`, 8080 unless changed.
+- **Cloud Server address points here and stays here.** Record the correct value somewhere findable. The port is `RECEIVER_PORT`, 8081 unless changed, and the device is pointed at it.
 - **If the receiver is run under WSL2 for a test, the device cannot reach it without a port proxy on the Windows host.** On the on-premises server this does not arise. Worth knowing before the first power-on wastes an afternoon.
 - Timezone +8.
 - Ingestion alert live.
@@ -172,7 +184,7 @@ Code being ready is not the gate. These are.
 
 - **Super administrator registered first.** Until one exists the device menu is open to anyone.
 - Verify mode set to face and fingerprint only.
-- Every active employee, face and fingerprint, PIN set to employee number.
+- Every active employee, face and fingerprint. **The PIN cannot be the padded employee number — the device refuses a leading zero** (SPEC §10), so what a `0090` employee's PIN is has to be decided before enrollment and recorded in the device-user mapping.
 - Scheduled around shifts, night shift included.
 - **Manual workers with worn fingerprints enroll on face.** Verify each enrollment works before the employee leaves the desk — one visibly failing employee damages confidence in the whole system.
 - Expect real failures in the first weeks: wet hands, gloves, lighting. The manual-entry count per employee is how bad enrollments get found and redone.
@@ -206,7 +218,7 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**Which period does each item actually run on** — are the 10th/15th/20th cut-offs deadlines or period boundaries?|HR|All aggregation|
 |Is the 30-minute threshold applied per month or per payroll half?|HR|Milestone 3|
 |What exactly does `AB — absent cut 3 times` cut, and against what?|HR|Milestone 3|
-|Is the employee number always 4 digits, and is it the device PIN?|HR|Enrollment|
+|Is the employee number always 4 digits, and **what is the PIN for an employee whose number starts with a zero** — the device refuses to store one (SPEC §10)|HR|Enrollment|
 |**When a number in the list is not four digits, is it a typo, an older format, or a different scheme?** (SPEC §9 A28, A29). Until answered the importer refuses it and has to be told to accept it|HR|The employee list|
 |Are numbers reused after someone leaves?|HR|Employees|
 |What employee groups exist, and does the group decide shift and break?|HR|Schedule|
@@ -235,7 +247,8 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**Privacy handling for passport, IC and medical data** — encryption, retention, access logging|Management|Milestone 4|
 |**ADMS protocol spec**|ZKTeco supplier|Confirms §12|
 |Which `Key=Value` options does the device accept in the handshake, and what does it do with each? Read them off the first real handshake (SPEC §9 A26)|The device, then ZKTeco supplier|Nothing structural — they are rows|
-|Which encoding does this firmware send ATTLOG and OPERLOG bodies in (SPEC §9 A27)?|The first real capture|Nothing structural — it is a row|
+|Which encoding does this firmware send ATTLOG and OPERLOG bodies in (SPEC §9 A27)? **The captured bodies were all ASCII with an empty Name field, so this is still open**|The first real capture|Nothing structural — it is a row|
+|**Are `~MaxAttLogCount=20`, `~MaxUserCount=80` and `~MaxFingerCount=80` per-push batch limits or storage limits** (SPEC §9 A34)? They contradict the datasheet by orders of magnitude|ZKTeco supplier, or the first push of users|Step 8, pushing users to the device|
 
 **Artifacts still wanted**
 
