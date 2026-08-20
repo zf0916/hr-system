@@ -114,7 +114,9 @@ def setup(session) -> Employee:
 
 def add_device_punch(session, employee: Employee, at: dt.datetime) -> RawRequest:
     """A real device punch: a raw request, parsed by the parser."""
-    body = (f"{PIN}\t{at.strftime('%Y-%m-%d %H:%M:%S')}\t0\t1\t0\t0\t0\r\n").encode()
+    # The shape the device sends: ten fields and a trailing tab (SPEC §12).
+    fields = [PIN, at.strftime("%Y-%m-%d %H:%M:%S"), "255", "1"] + ["0"] * 6
+    body = ("\t".join(fields) + "\t\r\n").encode()
     raw = RawRequest(
         method="POST", path="/iclock/cdata",
         query_string="SN=SIM0000000001&table=ATTLOG&Stamp=9999",

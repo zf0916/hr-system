@@ -7,10 +7,12 @@ cannot be recreated, and `seed` would destroy it.
 """
 
 import argparse
+import datetime as dt
 import sys
 from pathlib import Path
 
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 
 from app.config import DATABASE_URL, PARSER_VERSION
 from app.db import Session, engine
@@ -22,6 +24,7 @@ from app.employee_import import (
 )
 from app.models import (
     Base,
+    DailyAttendance,
     Device,
     DeviceOption,
     DeviceUserMap,
@@ -37,6 +40,8 @@ from app.models import (
     ParserSetting,
     RawRequest,
 )
+from app.cli_attendance import add_parsers as add_attendance_parsers
+from app.corrections import employee_by_number
 from app.cli_corrections import add_parsers as add_corrections_parsers
 from app.cli_raw import add_parsers as add_raw_parsers
 from app.cli_schedule import add_parsers as add_schedule_parsers
@@ -133,6 +138,9 @@ def cmd_status(args) -> int:
             "manual_punch": session.scalar(
                 select(func.count()).select_from(ManualPunch)
             ),
+            "daily_attendance": session.scalar(
+                select(func.count()).select_from(DailyAttendance)
+            ),
         }
     print(_dsn())
     for name, value in counts.items():
@@ -204,6 +212,50 @@ def cmd_employees_import(args) -> int:
         print("  added to the vocabulary:")
         for kind, value in result.new_vocabulary:
             print(f"    {kind}: {value}")
+    return 0
+
+
+def cmd_employees_map_pin(args) -> int:
+    """Point a device PIN at an employee, from a date.
+
+    The importer writes these rows from the employee list, on A19 — the PIN is
+    the employee number. This is for the case A19 does not cover: an enrollment
+    the device made on its own terms, such as a PIN with no leading zero, which
+    is the only kind the device will accept (SPEC §2, §10). It writes one dated
+    row in the mapping table and nothing else — no punch is touched, and
+    capture still resolves nothing (SPEC §13).
+    """
+    with Session() as session:
+        try:
+            employee = employee_by_number(session, args.employee)
+        except ValueError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 1
+        row = DeviceUserMap(
+            employee_id=employee.id,
+            serial_number=args.serial,
+            pin=args.pin,
+            effective_from=dt.datetime.strptime(args.start, "%Y-%m-%d").date(),
+            effective_to=(
+                dt.datetime.strptime(args.end, "%Y-%m-%d").date()
+                if args.end else None
+            ),
+            source=args.source,
+            note=args.note,
+        )
+        session.add(row)
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            print("refused: that PIN already points at an employee over part of "
+                  f"this range — one PIN cannot be two people on one day.\n  "
+                  f"{str(exc.orig).strip().splitlines()[0]}", file=sys.stderr)
+            return 1
+    print(f"pin {args.pin!r} -> employee {employee.employee_number} "
+          f"from {args.start}{' to ' + args.end if args.end else ' onwards'}")
+    print("  the mapping is read on the punch's own date, never at capture "
+          "(SPEC §9 A33, §13)")
     return 0
 
 
@@ -293,6 +345,21 @@ def main() -> int:
     )
     p_import.set_defaults(func=cmd_employees_import)
 
+    p_map = emp.add_parser(
+        "map-pin",
+        help="point a device PIN at an employee from a date, for an enrollment "
+             "the employee list does not describe",
+    )
+    p_map.add_argument("--pin", required=True, help="exactly as the device sends it")
+    p_map.add_argument("--employee", required=True, help="employee number")
+    p_map.add_argument("--from", dest="start", required=True, help="YYYY-MM-DD")
+    p_map.add_argument("--to", dest="end", help="YYYY-MM-DD, else open-ended")
+    p_map.add_argument("--serial", help="only this device, else any")
+    p_map.add_argument("--source", required=True,
+                       help="where this mapping came from, in words")
+    p_map.add_argument("--note")
+    p_map.set_defaults(func=cmd_employees_map_pin)
+
     emp.add_parser(
         "rekey", help="rebuild the matching keys from employee_number_rule"
     ).set_defaults(func=cmd_employees_rekey)
@@ -300,6 +367,7 @@ def main() -> int:
     add_schedule_parsers(sub)
     add_corrections_parsers(sub)
     add_raw_parsers(sub)
+    add_attendance_parsers(sub)
 
     args = parser.parse_args()
     return args.func(args)

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +29,7 @@ from openpyxl import load_workbook
 from sqlalchemy import delete, select
 
 from app.models import (
+    DailyAttendance,
     DeviceUserMap,
     Employee,
     EmployeeAssignment,
@@ -68,6 +70,9 @@ class StagedRow:
     active_from: dt.date
     left_on: dt.date | None
     device_pin: str | None
+
+
+log = logging.getLogger("hr.employee_import")
 
 
 @dataclass
@@ -272,9 +277,17 @@ def check_against_database(session, result: Result) -> None:
 def clear_employees(session) -> dict[str, int]:
     """Everything the importer writes, and nothing else. Captured punches are
     untouched: nothing at capture resolves a PIN to an employee, so they do not
-    depend on any of this."""
+    depend on any of this.
+
+    Daily attendance goes with it. Those rows are derived from punches, the
+    mapping and the schedule (SPEC §3, layer 3), so reloading the list makes
+    them stale rather than wrong — and they are rebuilt by
+    `hr attendance build`, not re-collected. The punches they were built from
+    are in the raw layer either way.
+    """
     counts = {}
     for model in (
+        DailyAttendance,
         DeviceUserMap,
         EmployeeAssignment,
         EmploymentPeriod,
@@ -283,6 +296,11 @@ def clear_employees(session) -> dict[str, int]:
         EmployeeImport,
     ):
         counts[model.__tablename__] = session.execute(delete(model)).rowcount
+    if counts.get("daily_attendance"):
+        log.info(
+            "%s daily attendance rows cleared with the list; rebuild them with "
+            "`hr attendance build`", counts["daily_attendance"]
+        )
     return counts
 
 

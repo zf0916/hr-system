@@ -721,3 +721,159 @@ class ManualPunch(Base):
 
 Index("ix_manual_punch_employee_day", ManualPunch.employee_id, ManualPunch.attendance_day)
 Index("ix_manual_punch_attendance_day", ManualPunch.attendance_day)
+
+
+# ---------------------------------------------------------------------------
+# Step 6: daily attendance.
+#
+# Layer 3 of SPEC §3: one row per employee per day, built over parsed punches,
+# corrections and the schedule. Every period total is a query over these rows,
+# so the rows carry facts and nothing aggregated (SPEC §3).
+#
+# Three things this layer deliberately does not do:
+#
+#   * It does not judge. "No punch" is a status because it is a fact; "absent"
+#     is not, because absence needs leave, which is step 5 (SPEC §3, §13).
+#   * It does not deduct. Late minutes are a figure; the threshold and the
+#     decision to deduct belong to §5 and to management.
+#   * It does not hide a manual punch. A manual punch counts toward the day's
+#     figures and the row says which figure came from one (SPEC §3, §13).
+# ---------------------------------------------------------------------------
+
+
+class AttendanceStatus(Base):
+    """What the punches on a day amount to, as a fact.
+
+    Rows, not constants, and deliberately short: two or more punches, exactly
+    one, or none. **There is no `absent`.** No punch and an absence are never
+    collapsed (SPEC §3, §13), and an absence cannot be decided without leave,
+    which does not exist yet.
+    """
+
+    __tablename__ = "attendance_status"
+
+    code = mapped_column(Text, primary_key=True)
+    label = mapped_column(Text, nullable=False)
+    note = mapped_column(Text)
+
+
+class DailyAttendance(Base):
+    """One employee, one attendance day.
+
+    The attendance day is the shift's, not the clock's, and it is decided by
+    `schedule.attendance_day_for` rather than re-derived here — a night-shift
+    punch at 04:35 belongs to the previous day (SPEC §4, §13).
+
+    Every figure on the row carries what produced it: the group and schedule in
+    force on that day, that schedule's scheduled start and grace, and whether
+    that schedule row is still provisional. A figure from a provisional
+    schedule is readable as provisional without going and looking.
+
+    `first_in` and `last_out` are SPEC §3's words for the day's earliest and
+    latest punch. **The device does not label a punch in or out** — status was
+    255 on every punch captured and punch state options are off (SPEC §12) — so
+    the pair only means anything when there are two or more punches. With one
+    punch there is a first in and no last out, and the constraint below is what
+    keeps anything from filling that in later (A35).
+    """
+
+    __tablename__ = "daily_attendance"
+
+    id = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    employee_id = mapped_column(BigInteger, ForeignKey("employee.id"), nullable=False)
+    attendance_day = mapped_column(Date, nullable=False)
+
+    # What was in force on that day, never what is in force now.
+    group_code = mapped_column(Text, ForeignKey("employee_group.code"))
+    schedule_id = mapped_column(BigInteger, ForeignKey("group_schedule.id"))
+    schedule_provisional = mapped_column(Boolean, nullable=False, default=False)
+    scheduled_start = mapped_column(DEVICE_TS)
+    scheduled_end = mapped_column(DEVICE_TS)
+    grace_minutes = mapped_column(Integer)
+
+    # The calendar's two separate facts (SPEC §4).
+    is_rest_day = mapped_column(Boolean, nullable=False, default=False)
+    holiday_name = mapped_column(Text)
+    holiday_closes = mapped_column(Boolean)
+
+    # The day's earliest and latest punch, and where each came from. A manual
+    # punch is never silently one of these: the source says so.
+    first_in = mapped_column(DEVICE_TS)
+    first_in_source = mapped_column(Text)
+    first_in_manual = mapped_column(Boolean, nullable=False, default=False)
+    last_out = mapped_column(DEVICE_TS)
+    last_out_source = mapped_column(Text)
+    last_out_manual = mapped_column(Boolean, nullable=False, default=False)
+
+    # Distinct punches, after re-pushes are dropped. A device re-pushes a batch
+    # after a timeout and the raw layer keeps every copy; this is the layer that
+    # deduplicates, which is what §12 means by "deduplicate downstream" (A37).
+    punch_count = mapped_column(Integer, nullable=False, default=0)
+    device_punch_count = mapped_column(Integer, nullable=False, default=0)
+    manual_punch_count = mapped_column(Integer, nullable=False, default=0)
+
+    # How many device pushes were dropped as copies of a punch already counted.
+    # A rising number here is the device retrying, not an employee punching.
+    duplicate_pushes = mapped_column(Integer, nullable=False, default=0)
+
+    # A figure, not a deduction. NULL where there is nothing to measure
+    # against — no punch, or a day with no scheduled start (A36).
+    late_minutes = mapped_column(Integer)
+
+    status_code = mapped_column(
+        Text, ForeignKey("attendance_status.code"), nullable=False
+    )
+
+    built_at = mapped_column(SERVER_TS, nullable=False, server_default=func.now())
+    note = mapped_column(Text)
+
+    __table_args__ = (
+        # One row per employee per day, enforced here rather than by whichever
+        # code path writes next.
+        Index("uq_daily_attendance_employee_day", "employee_id", "attendance_day",
+              unique=True),
+        CheckConstraint(
+            "punch_count = device_punch_count + manual_punch_count",
+            name="daily_attendance_counts_add_up",
+        ),
+        CheckConstraint(
+            "(first_in IS NULL) = (punch_count = 0)",
+            name="daily_attendance_first_in_iff_punches",
+        ),
+        # A35, in the database: one punch is a first in and nothing else. A row
+        # claiming a last out on a single punch is the day being made to look
+        # like a full one.
+        CheckConstraint(
+            "last_out IS NULL OR punch_count >= 2",
+            name="daily_attendance_last_out_needs_two_punches",
+        ),
+        CheckConstraint(
+            "last_out IS NULL OR first_in IS NULL OR last_out >= first_in",
+            name="daily_attendance_last_out_after_first_in",
+        ),
+        CheckConstraint(
+            "late_minutes IS NULL OR late_minutes >= 0",
+            name="daily_attendance_late_minutes_positive",
+        ),
+        CheckConstraint(
+            "duplicate_pushes >= 0", name="daily_attendance_duplicates_positive"
+        ),
+        # A figure needs the thing it was measured against on the same row.
+        CheckConstraint(
+            "late_minutes IS NULL OR (scheduled_start IS NOT NULL "
+            "AND grace_minutes IS NOT NULL AND first_in IS NOT NULL)",
+            name="daily_attendance_late_minutes_have_a_baseline",
+        ),
+        CheckConstraint(
+            "(first_in IS NULL) = (first_in_source IS NULL)",
+            name="daily_attendance_first_in_says_its_source",
+        ),
+        CheckConstraint(
+            "(last_out IS NULL) = (last_out_source IS NULL)",
+            name="daily_attendance_last_out_says_its_source",
+        ),
+    )
+
+
+Index("ix_daily_attendance_day", DailyAttendance.attendance_day)
+Index("ix_daily_attendance_status", DailyAttendance.status_code)

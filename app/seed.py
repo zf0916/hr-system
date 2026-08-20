@@ -8,6 +8,7 @@ protocol being unverified is survivable.
 import datetime as dt
 
 from app.models import (
+    AttendanceStatus,
     CorrectionReason,
     Device,
     DeviceOption,
@@ -151,6 +152,21 @@ CORRECTION_REASONS = [
 ]
 
 
+# SPEC §3. What the punches on a day amount to, as a fact — and nothing more.
+# There is no `absent` row, and adding one would be the collapse §13 forbids:
+# no punch is a fact, absence is an HR judgement and needs leave, which is
+# step 5. A day with one punch is its own status because it is its own fact
+# (SPEC §9 A35).
+ATTENDANCE_STATUSES = [
+    ("punches_recorded", "Two or more punches on the record",
+     "a first in and a last out both exist"),
+    ("one_punch", "One punch on the record",
+     "a first in and no last out — the device does not label direction"),
+    ("no_punch", "No punch on the record",
+     "a fact, never an absence: absence needs leave (SPEC §3, §13)"),
+]
+
+
 def seed(session) -> None:
     for serial, label, note in DEVICES:
         session.add(Device(serial_number=serial, label=label, note=note))
@@ -174,4 +190,6 @@ def seed(session) -> None:
         session.add(SiteSetting(key=key, value=value, note=note))
     for code, label, path, note in CORRECTION_REASONS:
         session.add(CorrectionReason(code=code, label=label, path=path, note=note))
+    for code, label, note in ATTENDANCE_STATUSES:
+        session.add(AttendanceStatus(code=code, label=label, note=note))
     session.commit()

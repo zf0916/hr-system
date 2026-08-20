@@ -56,6 +56,10 @@ Today both HR and Accounts read the same punch card, at different times and at d
 2. **Parsed punches** — one row per punch line. Disposable: rebuilt by replaying the raw layer.
 3. **Daily attendance** — one row per employee per day. First in, last out, late minutes, status.
 
+**A re-pushed punch is one punch, and the daily row is where that is settled.** The device re-pushes a batch after a timeout and both layers above keep every copy (§12). The daily row counts the same employee at the same second once, and records how many copies it dropped — a rising number there is the device retrying, not somebody punching. **A manual punch is never deduplicated:** each one is a separate act by a named person.
+
+**A status on the daily row says what the punches amount to and nothing else** — two or more punches, exactly one, or none. **There is no status meaning absent**, because absence needs leave, and a status list that can express it invites the collapse this section forbids.
+
 **Every period total is a query over the daily rows.** Half-month, 16th-to-15th, calendar month — all of them. Unresolved period boundaries therefore cost nothing structural.
 
 **A parser change means replaying the raw layer, never re-collecting from the device.**
@@ -269,10 +273,21 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A32|The site's timezone is Asia/Kuala_Lumpur, and a guard entry's server stamp is read as a local punch time through it. **The device's offset is observed at exactly +8** (§12), which is what that zone produces and what `TimeZone=8` told it|
 |A33|A device punch belongs to the employee its PIN mapped to on the punch's own date, and to the group that employee was in on that date|
 |A34|`~MaxAttLogCount=20`, `~MaxUserCount=80` and `~MaxFingerCount=80` in the device's option push are **per-push batch limits, not storage limits**|
+|A35|A day's first in and last out are its earliest and latest punch. **With one punch there is a first in and no last out** — the device does not label direction, so a single punch cannot say which it was|
+|A36|Late minutes are the whole minutes, floored, from scheduled start plus grace to the day's first punch, and are **empty rather than zero** where there is nothing to measure: no punch, a rest day, a closed holiday, or no schedule|
+|A37|**Two device punches for the same employee at the same second are one punch.** The extra pushes are counted as copies and not as punches|
 
 **Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 is isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
 
 **A21 — "the device pushes the PIN with leading zeros intact" — is answered and gone.** The question never arises: the device refuses to accept a leading zero in a user ID at all (§10). The mapping absorbed it with no code change, which is what §13's rule against resolving a PIN at capture was for.
+
+A35, A36 and A37 are the three the daily row rests on, and all three are about what a figure means rather than what it is worth.
+
+A35 is the one to watch on paper. A day with one punch is a real case — a failed punch at the door, a shift left early — and what HR writes on the sheet for it is not known. Storing a last out equal to the first in would say the employee left the moment they arrived, so the row says nothing instead, and the database refuses a last out on a single punch.
+
+A36 decides whether a period total can add its days up. Empty is not zero: a rest day and an on-time arrival are different facts, and a total that treats them alike would count rest days as punctuality. Floored minutes mean 08:00:59 against an 08:00:00 start is not yet a minute late.
+
+A37 is the dedup rule §12 defers downstream, and it is the one most likely to be wrong in a specific way: **two employees cannot share a second, but one employee arriving at a queue could conceivably be read twice in the same second by the device.** The capture cannot settle it — the device suppresses a repeat verification from the same user within an interval nobody has read yet (§10), which may make it impossible by construction.
 
 A32 and A33 are what turn a correction and a device punch into rows about the same person on the same day. A32 is a row; A33 is the date the mapping is read on, and it matters only when a PIN is reassigned or an employee changes group mid-shift.
 

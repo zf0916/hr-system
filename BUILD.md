@@ -37,7 +37,7 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 |**3**|**Schedule and calendar** — per group, effective-dated, plus holidays and rest days|A past period renders with the schedule that was in force then, not today's|
 |**4**|**Corrections** — guard entry and HR retroactive entry, both marked and counted|A guard entry cannot be given a time; an HR entry can|
 |**5**|**HR entry** — leave, gate pass, treatment slip, from the paper forms HR already receives|Codes appear on the generated sheet|
-|**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it|
+|**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it — **built; the rows exist and a total is a query away**|
 |**7**|**The sheet** — generated in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card|
 |**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device|
 |**9**|**Ingestion alert** — warns when punches stop arriving|Silence for N hours raises a warning|
@@ -63,6 +63,14 @@ Deliberately not in step 2: no employee screen, no push to the device, no leave,
 **Every schedule and every holiday now in the database is marked provisional.** The 2026 list is still parked. `fixtures/holidays_provisional_2026.xlsx` carries only holidays whose dates are fixed by the calendar — Hari Raya, Chinese New Year, Deepavali, Wesak and Thaipusam are deliberately absent, because a plausible wrong date is worse than a missing one.
 
 Deliberately not in step 3: no late minutes, no daily attendance, no sheet.
+
+**Step 6 is built.** One row per employee per day, over parsed punches, corrections and the schedule in force on that day. First in and last out are the day's earliest and latest punch — and with one punch there is a first in and no last out, which the database enforces rather than trusts (A35). Late minutes are computed from that day's schedule row plus its grace, and the row carries the start it was measured against, the schedule row's id, and **whether that schedule is still provisional**, so a figure that rests on a guess reads as one. Manual punches count toward the figures and every figure says whether a person entered it. A re-pushed punch counts once, and the row says how many copies it dropped (A37).
+
+`tools/attendance_gate.py` is 46 checks: a night-shift punch at 04:35 landing on the previous day and not its own, late minutes against June's schedule rather than July's, a manual punch that cannot be silent, one punch that cannot grow a last out, and two rebuilds producing an identical row. Four raw inserts are refused by the constraint each was aimed at — a first in with no source, a last out on one punch, two rows for one employee on one day, and a status of `absent`, which is not in the vocabulary and never will be.
+
+**Deliberately not in step 6:** no sheet, no period totals, no screen, no export, no work hours, no overtime, no absence. Every period total is a query over these rows (SPEC §3), and no period boundary is confirmed.
+
+**What the real capture produces.** With the provisional schedules and the sample employee list loaded, and device user 1 mapped to a fixture employee, 2026-08-20 comes out as three punches, first in 11:26:01, last out 11:29:42, 206 late minutes — **and the 206 is against a schedule row HR has never seen.** The punch times are real; the lateness is arithmetic on a guess. The simulator's own pushes produce the other instructive row: 42 copies of one punch collapse to one, and a night-shift group's 08:03 punch lands on the previous attendance day with 753 late minutes, which is what a 240-minute window (A30) does with a punch that does not belong to that shift.
 
 **Step 4 is built.** Both correction paths, both marked, both counted. A guard entry has no field for a time — the check constraint refuses a guard row that carries one, and the function has no parameter for it. An HR retroactive entry must carry a time and a reason in words. Both land on an attendance day through the schedule in force, so a night-shift correction after midnight belongs to the shift's day. `hr punches --employee N --day D` reads device punches and corrections together, and every line says where it came from and, if a person made it, who and why. `hr corrections count` is per employee per period, split by path — the signal SPEC §3 asks for.
 
@@ -93,6 +101,12 @@ Run it:
     hr calendar adjust --date 2026-05-01 --closes no --reason "..." --by "..."
 
     uv run python tools/corrections_gate.py   # must exit 0
+    uv run python tools/attendance_gate.py    # must exit 0
+
+    hr attendance build --from 2026-08-16 --to 2026-08-21
+    hr attendance show --employee 0090 --from 2026-08-20 --detail
+    hr employees map-pin --pin 1 --employee 0090 --from 2026-08-01 --source "..."
+
     docker compose exec api python tools/parser_gate.py   # must exit 0
     SKIP_DB=1 uv run python tools/parser_gate.py          #   shape half only
 
@@ -169,7 +183,7 @@ Through the receiver, kept as `raw_request` 96–115. Every line here can be che
 
 - The database is dropped and recreated whenever the shape changes. No migration files, no ordering, no schema history.
 - Simulator output is not worth preserving.
-- **The device's own capture is, and already had to be preserved once.** Parser version 2 changed `parsed_punch`, and the drop would have taken `raw_request` with it. What was done, and what to do again until migrations start: `pg_dump --data-only --table=raw_request`, stop the receiver, `hr seed --force`, restore the dump, `setval` the id sequence, `hr replay`, start the receiver. The ids stay as they were, because SPEC §12 cites them.
+- **The device's own capture is, and already had to be preserved once.** Parser version 2 changed `parsed_punch`, and the drop would have taken `raw_request` with it. What to do, in this order: **stop the receiver first** — the device is pushing, and anything that arrives after the dump is gone — then `pg_dump --data-only --table=raw_request`, `hr seed --force`, restore the dump, `setval` the id sequence, `hr replay`, start the receiver. The ids stay as they were, because SPEC §12 cites them.
 
 **That dump-and-restore is not a migration and does not become one.** It rebuilds one append-only table from its own rows; nothing about the schema's history is recorded, and layer 2 is rebuilt by replay rather than carried across. It is, though, the rehearsal for what comes next.
 
@@ -270,6 +284,9 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**What would a real `Stamp` / `OpStamp` cursor change?** Ours is a row fixed at `9999` and the device echoes it back; it costs nothing today because the device deletes each record once acknowledged (SPEC §12)|ZKTeco supplier|Nothing yet|
 |**Read the repeat-verification interval off the device menu** (SPEC §10). It is the floor on how close two genuine punches can be, which matters for a gate pass return|Zi Fong, at the device|Daily attendance, time off|
 |**Are `~MaxAttLogCount=20`, `~MaxUserCount=80` and `~MaxFingerCount=80` per-push batch limits or storage limits** (SPEC §9 A34)? They contradict the datasheet by orders of magnitude|ZKTeco supplier, or the first push of users|Step 8, pushing users to the device|
+|**What does the sheet show for a day with one punch** (SPEC §9 A35)? The row records a first in and no last out, because a single punch cannot say which it was|HR|The sheet, step 7|
+|**Are late minutes empty or zero on a rest day, a closed holiday and a day with no punch** (SPEC §9 A36)? The row leaves them empty, so a period total cannot mistake a rest day for punctuality|HR, then Accounts|Milestone 3 totals|
+|**Can two genuine punches for one employee land in the same second** (SPEC §9 A37)? The daily row counts them as one push repeated. The device's own repeat-verification suppression may rule it out — its interval is unread|The device, then HR|Daily attendance|
 
 **Artifacts still wanted**
 
