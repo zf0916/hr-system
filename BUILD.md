@@ -26,6 +26,8 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 
 **Paper retires one document at a time.** At every stage Accounts keys fewer fields than before and more than none. There is no point where the system produces a complete payroll entry but is not yet in use.
 
+**Milestone 2 is blocked on Accounts, not on code.** Its inputs are Milestone 1's — the same punches, the same daily rows, the same leave entry — so nothing else has to be built first. What gates it is the Accounts questions in Parked: what the payroll codes mean and which are used, whether `Lateness` is the raw total or the deductible portion, whether `Work Hours` is gross or net, whether SQL Account imports a file or is keyed, and who keys `Basic Rate`. **Overtime is the hardest of them, and differently hard:** the others are questions about a field this system can fill, and overtime derives from nothing this system holds. SPEC §8 says why — the device shows time present, which is not approved overtime. Answering it may mean an input path that does not exist yet.
+
 ---
 
 ## Milestone 1 — steps
@@ -38,7 +40,7 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 |**4**|**Corrections** — guard entry and HR retroactive entry, both marked and counted|A guard entry cannot be given a time; an HR entry can|
 |**5**|**HR entry** — leave, gate pass, treatment slip, from the paper forms HR already receives|Codes appear on the generated sheet|
 |**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it — **built; the rows exist and a total is a query away**|
-|**7**|**The sheet** — generated in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card|
+|**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7)|
 |**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device|
 |**9**|**Ingestion alert** — warns when punches stop arriving|Silence for N hours raises a warning|
 
@@ -259,6 +261,7 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 - Cards stop only after a clean parallel cycle. Retained afterwards for the statutory period.
 - **HR continues the paper attendance sheet until leave entry exists**, because leave codes are written on the card today and have nowhere else to go.
 - The summaries keep being signed by HR/Admin and Acct/Payroll as today. The system generates them; it does not change who approves them.
+- **After cutover Accounts reads the generated sheet by hand until Milestone 2 exists** — the cards are gone either way, and the sheet is the filed record they read instead (SPEC §7). That is "fewer fields than before and more than none" working as intended, not a gap waiting to be closed.
 
 ---
 
@@ -288,12 +291,12 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**The group codes themselves are invented.** DAY-PROD, NIGHT-PROD and OFFICE came from the sample spreadsheet, not from HR — they are replaced by whatever the real employee list carries, not corrected|HR|Schedule|
 |**How is a mistaken correction undone?** A guard entry made for the wrong employee cannot be edited or deleted, and SPEC §3 does not say what should replace it|HR, then management|Corrections|
 |Confirm the site timezone (SPEC §9 A32), and that a PIN is never reassigned to another employee while old punches still matter (A33)|Zi Fong / HR|Corrections, daily attendance|
-|Does the sheet need to stay Excel, or is a screen acceptable?|HR|Milestone 1 output|
 |**Can SQL Account import a file, or is it keyed by hand?** Sample export if yes|Accounts|Milestone 2 deliverable|
 |What do `DW` `MT` `MR` `CL` `HL` `EX` `PT` `AD` `LS` `OOB` mean, and which are actually used? **`CL`, `HL` and `MT` have candidates by content from the leave application form — Compassionate, Hospitalization, Maternity (SPEC §6). Candidates for Accounts to confirm, not decided**|Accounts|Milestone 2|
 |Is `Lateness` the raw total or only the deductible portion?|Accounts|Milestone 2|
 |Is `Work Hours` gross or net of break — and which break?|Accounts|Milestone 2|
 |**Where does overtime come from?** A form, an approval, who calculates it|Accounts|Milestone 2|
+|**Does Accounts key `Basic Rate` themselves?** It is on the payroll entry screen and this system never holds pay, so the export would otherwise carry a field with no source|Accounts|Milestone 2|
 |**What is at the guard post** — a PC, a shared phone, or nothing? And how far from the device?|Zi Fong|The fallback design|
 |Where is the device mounted, and is there network and power there?|Zi Fong|Install|
 |How many enroll, and when can they be scheduled including night shift?|HR|Enrollment|

@@ -226,6 +226,15 @@ Either field on a leave record can therefore be empty: a form type with no code,
 
 The Daily Workers Attendance sheet, in HR's existing layout.
 
+**HR files it as the official record, and that is what it is for.** It is not working paper and it is not a convenience view of something else — the filed sheet is the source of truth HR keeps, and Accounts reads it.
+
+**Two outputs, and neither replaces the other:**
+
+- **A screen, which is the system.** Regenerated on demand, always current with the stored data.
+- **An Excel file in HR's existing layout, which is the record.** That is the artefact that gets filed.
+
+**This is what makes "never annotated by hand" enforceable rather than a preference.** A filed record somebody writes on is precisely the thing this system replaces: the writing is invisible to everything downstream, and the sheet cannot be regenerated without losing it. Because the screen is always regenerable and the file is only ever printed from it, a correction has one place to go — a row — and the filed copy is reprinted rather than amended.
+
 - **Generated output. Regenerated on demand. Never annotated by hand or edited in place.** A sheet HR writes on cannot be regenerated without losing what they wrote, and leaves that data invisible to everything downstream.
 - Everything on it comes from stored data: punches, corrections, leave, schedule, calendar.
 - A cell holds **a tick when the punch is on schedule, the actual punch time when it is outside schedule**, or a leave code.
