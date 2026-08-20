@@ -252,9 +252,7 @@ The punch card itself is not needed. Its only unique content is the leave codes 
 |Item|Note|
 |---|---|
 |Leave entitlements and balances|Milestone 5|
-|Leave applied 7 days in advance, except compassionate, and approved before it is taken|Milestone 5|
-|Sick leave attaches a sick certificate|Milestone 5|
-|Unpaid leave attaches supporting documents|Milestone 5|
+|Enforcing the leave rules stated on the form (SPEC §6) — notice period, approval before the leave, attachments|Milestone 5|
 |Approval workflow|**Approval links must be single-use, expiring and bound to one supervisor** — a messaging link can be forwarded, and the endpoint is public. **HR-entered applications never re-trigger approval**; the paper form was already signed, and asking a supervisor twice makes them stop responding|
 |Notification channel|Telegram's bot API is free and quick. WhatsApp Business API costs per message and needs verification through Meta. WhatsApp is the common channel locally. **Settle with the supervisors before building**|
 |Overtime input path|Source unknown. May be needed for Milestone 2|

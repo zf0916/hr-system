@@ -172,6 +172,14 @@ Cut-offs stated on the sheet: time off and late coming close on the 10th, salary
 
 The form also carries: staff number, department, date of application, period from, period to, number of days, and the applicant's signature.
 
+**Policy stated on the form itself:**
+
+- **Leave is applied for 7 days in advance and approved before it is taken.** Compassionate leave is the exception to the seven days.
+- **Sick leave attaches a sick certificate.**
+- **Unpaid leave attaches supporting documents**, as well as the reason.
+
+These are the factory's rules, printed where the employee signs. Nothing in the system enforces them — HR types forms that were already accepted on paper, whatever the dates on them say. Enforcing them is Milestone 5.
+
 ### Written on the sheet — codes from the sheet legend
 
 |Code|Meaning|
