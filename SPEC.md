@@ -87,6 +87,23 @@ A missed, failed or wrong punch is corrected by **adding a row to a separate adj
 
 **No punch and an absence are not the same thing** and are never collapsed into one status. No punch is a fact; absence is an HR judgement.
 
+### The ingestion alert
+
+**Capture stopping is silent by design** — the device retries quietly and keeps its records (§12), so a receiver that has been unreachable since Tuesday looks exactly like a factory where nobody punched. The alert is what turns that silence into a warning.
+
+**Two silences, and they are different failures:**
+
+|Silence|What it means|When it is checked|
+|---|---|---|
+|**Contact** — nothing at all from the device|The device is off, the network is down, or the Cloud Server setting moved (§10)|Always. The device polls every few seconds whether or not anybody punches, so this is checkable at 3am on a Sunday|
+|**Punches** — the device is talking, but no punch has arrived|Something between the reader and the record is broken|Only while a shift is running on a day the calendar says the factory is open|
+
+**A single "time since the last punch" would be both useless and dangerous**: it alarms every weekend and every public holiday, and it stays quiet when the receiver is unplugged on one. Both thresholds are rows, and so is whether punches are checked at all on a closed day (§9 A43–A45).
+
+**The alert reads the database and never asks the device anything.** That is what lets it answer during the outage it exists to catch. It does not re-request a batch and does not recover anything — the device does that by itself.
+
+**The alert watches the serials on the allowlist.** A device that is capturing but was never added to the list is a device nobody is watching, so the check also reports serials that have pushed and are not on it.
+
 ---
 
 ## 4. Schedule, breaks and calendar
@@ -296,10 +313,15 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A40|**One sheet covers one calendar month.** The 10th, 15th and 20th on the paper sheet may be deadlines rather than boundaries (§5)|
 |A41|**The note in the sheet's top-left has never been read.** The cell renders empty and is marked unread; nothing is guessed into it|
 |A42|A column shades **only when the day is closed for every group on the sheet.** Groups resting on different days would break whole-column shading|
+|A43|**15 minutes of total silence from a device is a fault.** The device polls every 10 seconds, so that is about 90 missed polls|
+|A44|**A punch is due once a shift has been running 60 minutes**, and no punch for 180 minutes while one is running on an open day is a fault. **Closed days are not checked for punch silence at all**|
+|A45|**A serial on the allowlist that has never been heard from is not an outage.** It starts being watched at its first request|
 
 **Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 is isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
 
 **A21 — "the device pushes the PIN with leading zeros intact" — is answered and gone.** The question never arises: the device refuses to accept a leading zero in a user ID at all (§10). The mapping absorbed it with no code change, which is what §13's rule against resolving a PIN at capture was for.
+
+A43 to A45 are the alert's, and the risk in them is the same in both directions: too tight and HR learns to ignore it, too loose and a day of capture is lost before anybody looks. **A43 is the cheap one to get right** — the device polls every ten seconds, so any threshold above a few minutes is safe and 15 was chosen to survive a reboot without crying wolf. **A44 is the one carrying a real judgement**: 60 minutes before a punch is due, because a shift can legitimately start slowly, and 180 minutes of nothing while a shift runs, because that is long enough to be a fault and short enough to fix the same day. **A45 exists because the alternative alarms forever**: a serial added before the device is installed would raise an outage every check until it is mounted.
 
 A38 to A42 are the sheet's, and they are all rows so that the layout has no constants in it. **A38 is the one that decides what a reader sees**: it makes "outside schedule" mean late in or early out, which §5 defines for arrival and §8 only names for departure — so the early half is the unconfirmed half, and a day that is both shows both times separated by a slash. **A41 is deliberately empty rather than filled in**: the note exists on HR's paper, has never been read, and a plausible guess in a filed record is worse than a blank marked unread. **A42 is the one that could quietly stop being true** — §4 makes the rest day a column on the schedule row, so a group resting on another day is legal, and on that day the sheet stops shading and says why rather than shading a column that is not whole.
 
@@ -355,7 +377,7 @@ Capacity, from the manufacturer's datasheet: 8,000 users · 8,000 fingerprint te
 - **Face and fingerprint only.** PIN-alone and card verification disabled. Punch cards are currently shared between employees; a PIN or a card reproduces that, a biometric does not. The PIN still exists as the device's user identifier — what is disabled is the PIN as a credential.
 - **A super administrator is registered before deployment.** Until one exists the device menu is open to anyone who walks up to it, and the verify mode or the server address can be changed by hand.
 - **The device has one Cloud Server setting and this system holds it.** ZKTeco's own software competes for the same setting — whichever holds it receives the pushes and the other receives nothing. Their software may be used once for bulk enrollment, then the address is repointed here. It is not installed, licensed or maintained as part of the running system.
-- **If anyone repoints that setting, capture stops silently while the device keeps recording locally.** The ingestion alert is the only thing that catches it. Record the correct value somewhere findable.
+- **If anyone repoints that setting, capture stops silently while the device keeps recording locally.** The ingestion alert is the only thing that catches it, and it catches it as contact silence (§3) — usually within minutes, because the polls stop with everything else. Record the correct value somewhere findable.
 - Device timezone +8. Clock drift corrupts lateness directly — compare the device's time against the server's arrival time to detect it.
 
 ### Fallback when biometrics fail

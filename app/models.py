@@ -903,3 +903,66 @@ class SheetSetting(Base):
     key = mapped_column(Text, primary_key=True)
     value = mapped_column(Text, nullable=False)
     note = mapped_column(Text)
+
+
+# ---------------------------------------------------------------------------
+# Step 9: the ingestion alert.
+#
+# Two silences, and they are different failures (SPEC §3, §12):
+#
+#   contact  the device says nothing at all. It polls every ten seconds even
+#            when nobody punches, so silence here means the device is off, the
+#            network is down, or the Cloud Server setting was repointed —
+#            which §10 says stops capture silently while the device keeps
+#            recording locally.
+#   punches  the device is talking but no punch has arrived while a shift is
+#            running on a day the factory is open. A quiet night and a Sunday
+#            are not this.
+#
+# Collapsing them would produce an alert that cries wolf every weekend and
+# stays quiet when the receiver is unplugged on a public holiday.
+# ---------------------------------------------------------------------------
+
+
+class AlertSetting(Base):
+    """Thresholds. Rows, because the right numbers are guesses until the
+    factory has run on them (SPEC §9 A43-A45)."""
+
+    __tablename__ = "alert_setting"
+
+    key = mapped_column(Text, primary_key=True)
+    value = mapped_column(Text, nullable=False)
+    note = mapped_column(Text)
+
+
+class IngestionAlert(Base):
+    """One row per state change, never one per check.
+
+    A check that wrote a row every time it ran would bury the transition that
+    matters in thousands of identical rows. Raised and cleared are both
+    recorded, so an outage has a start, an end and a length that can be read
+    off afterwards — which is what makes the alert answerable to the question
+    "how long were we blind?"
+    """
+
+    __tablename__ = "ingestion_alert"
+
+    id = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    changed_at = mapped_column(SERVER_TS, nullable=False, server_default=func.now())
+    serial_number = mapped_column(Text, nullable=False)
+    kind = mapped_column(Text, nullable=False)      # 'contact' or 'punch'
+    state = mapped_column(Text, nullable=False)     # 'raised' or 'cleared'
+    minutes_silent = mapped_column(Integer)
+    threshold_minutes = mapped_column(Integer)
+    detail = mapped_column(Text, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("kind IN ('contact', 'punch')", name="ingestion_alert_kind"),
+        CheckConstraint(
+            "state IN ('raised', 'cleared')", name="ingestion_alert_state"
+        ),
+    )
+
+
+Index("ix_ingestion_alert_serial_kind", IngestionAlert.serial_number,
+      IngestionAlert.kind, IngestionAlert.id)

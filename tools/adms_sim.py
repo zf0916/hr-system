@@ -111,6 +111,9 @@ class Sim:
     failures: list = field(default_factory=list)
     checks: int = 0
     requests: int = 0
+    # ATTLOG bodies this run sent on purpose in a broken state. Everything else
+    # it sends is meant to parse.
+    deliberately_malformed: list = field(default_factory=list)
 
     # ---- transport ---------------------------------------------------------
 
@@ -259,13 +262,23 @@ def run_cycle(sim: Sim) -> None:
     print("\n-- malformed input (every one still has to be answered)")
     malformed = [
         ("too few fields", attlog_body([("0090", "2026-08-18 08:00:00")]), 1),
-        ("unparseable time", b"0090\tyesterday morning\t0\t1\t0\t0\t0\r\n", 1),
-        ("empty pin", b"\t2026-08-18 08:00:00\t0\t1\t0\t0\t0\r\n", 1),
+        # Wrong in exactly one way each, and the right shape otherwise — a
+        # line that is also the wrong length fails for two reasons and proves
+        # neither.
+        ("unparseable time",
+         attlog_body([("0090", "yesterday morning", "255", "1",
+                       "0", "0", "0", "0", "0", "0")]), 1),
+        ("empty pin",
+         attlog_body([("", "2026-08-18 08:00:00", "255", "1",
+                       "0", "0", "0", "0", "0", "0")]), 1),
         ("binary in an ATTLOG body", PHOTO_BODY[:64], None),
         ("no separators at all", b"garbage garbage garbage\r\n", 1),
         ("empty body", b"", 0),
     ]
     for label, body, expected_lines in malformed:
+        # Recorded so the check below can tell a line that is meant to fail
+        # from one that is failing because this file is out of date.
+        sim.deliberately_malformed.append(body)
         r = sim.send("POST", "/iclock/cdata",
                      {"SN": SN, "table": "ATTLOG", "Stamp": "9999"}, body)
         sim.firmware_accepts(f"malformed/{label}", r)
@@ -321,7 +334,12 @@ def run_cycle(sim: Sim) -> None:
               "unknown serial: still answered the handshake", f"got {r.text[:40]!r}")
 
     print("\n-- a shift's worth in one batch")
-    big = [(f"{i:04d}", f"2026-08-18 07:{i % 60:02d}:00", "0", "1", "0", "0", "0")
+    # The observed shape, like every other well-formed line here: ten fields,
+    # status 255, verify 1 or 15 (SPEC §12). A batch built to the old
+    # seven-field guess parses as fifty failures and says nothing about the
+    # receiver.
+    big = [(f"{i:04d}", f"2026-08-18 07:{i % 60:02d}:00", "255",
+            "15" if i % 2 else "1", "0", "0", "0", "0", "0", "0")
            for i in range(1, 51)]
     r = sim.send("POST", "/iclock/cdata", {"SN": SN, "table": "ATTLOG", "Stamp": "10000"},
                  attlog_body(big))
@@ -453,6 +471,34 @@ def check_db(sim: Sim, baseline: int) -> None:
             (baseline,),
         )
         sim.check(cur.fetchone()[0] == 0, "every parsed line records its codec")
+
+        # **The check that catches this file going stale.** Every ATTLOG body
+        # this run sent, minus the ones it broke on purpose, has to parse
+        # clean. Without it, a simulator still sending last month's punch shape
+        # pushes fifty failing lines a run and the gate stays green — the whole
+        # point of the gate is that a wrong shape is loud.
+        cur.execute(
+            f"SELECT count(*) FROM parsed_punch p "
+            f"JOIN raw_request r ON r.id = p.raw_request_id "
+            f"WHERE r.id > %s AND lower(r.table_param) = 'attlog' "
+            "AND p.parse_ok = false AND NOT (r.body = ANY(%s))",
+            (baseline, sim.deliberately_malformed),
+        )
+        stale = cur.fetchone()[0]
+        cur.execute(
+            f"SELECT count(*) FROM parsed_punch p "
+            f"JOIN raw_request r ON r.id = p.raw_request_id "
+            f"WHERE r.id > %s AND lower(r.table_param) = 'attlog' "
+            "AND NOT (r.body = ANY(%s))",
+            (baseline, sim.deliberately_malformed),
+        )
+        meant_to_parse = cur.fetchone()[0]
+        sim.check(
+            stale == 0 and meant_to_parse > 0,
+            f"every line meant to be well-formed parsed ({meant_to_parse} lines)",
+            f"{stale} of {meant_to_parse} failed — this file is sending a shape "
+            "the parser does not accept (SPEC §12)",
+        )
 
         # A body the parser choked on is answered OK and stored, which is the
         # rule — and is also invisible from outside. This is where it shows.

@@ -40,6 +40,7 @@ from app.models import (
     ParserSetting,
     RawRequest,
 )
+from app.cli_alert import add_parsers as add_alert_parsers
 from app.cli_attendance import add_parsers as add_attendance_parsers
 from app.corrections import employee_by_number
 from app.cli_corrections import add_parsers as add_corrections_parsers
@@ -216,6 +217,42 @@ def cmd_employees_import(args) -> int:
     return 0
 
 
+def cmd_devices_add(args) -> int:
+    """Put a device on the allowlist.
+
+    The allowlist is what the receiver logs unknown serials against (SPEC §12)
+    and what the ingestion alert watches (step 9). A device that captures
+    perfectly but is not on this list is a device nobody is watching.
+    """
+    with Session() as session:
+        if session.get(Device, args.serial) is not None:
+            print(f"{args.serial} is already on the allowlist", file=sys.stderr)
+            return 1
+        session.add(Device(serial_number=args.serial, label=args.label,
+                           note=args.note))
+        session.commit()
+    print(f"{args.serial} added: {args.label}")
+    print("  the receiver already answered it 200 OK either way — this is what "
+          "the ingestion alert watches (SPEC §12, step 9)")
+    return 0
+
+
+def cmd_devices_list(args) -> int:
+    with Session() as session:
+        devices = list(session.scalars(select(Device).order_by(Device.serial_number)))
+        if not devices:
+            print("the allowlist is empty")
+            return 0
+        for device in devices:
+            last = session.scalar(
+                select(func.max(RawRequest.received_at))
+                .where(RawRequest.serial_number == device.serial_number)
+            )
+            heard = last.isoformat(sep=" ", timespec="seconds") if last else "never"
+            print(f"{device.serial_number:<18} {device.label:<24} last heard {heard}")
+    return 0
+
+
 def cmd_employees_map_pin(args) -> int:
     """Point a device PIN at an employee, from a date.
 
@@ -365,11 +402,23 @@ def main() -> int:
         "rekey", help="rebuild the matching keys from employee_number_rule"
     ).set_defaults(func=cmd_employees_rekey)
 
+    p_dev = sub.add_parser("devices", help="the device allowlist")
+    dev = p_dev.add_subparsers(dest="devices_command", required=True)
+    p_dev_add = dev.add_parser(
+        "add", help="add a serial to the allowlist, so the alert watches it")
+    p_dev_add.add_argument("--serial", required=True)
+    p_dev_add.add_argument("--label", required=True)
+    p_dev_add.add_argument("--note")
+    p_dev_add.set_defaults(func=cmd_devices_add)
+    dev.add_parser("list", help="what is on the allowlist, and when each was "
+                                "last heard from").set_defaults(func=cmd_devices_list)
+
     add_schedule_parsers(sub)
     add_corrections_parsers(sub)
     add_raw_parsers(sub)
     add_attendance_parsers(sub)
     add_sheet_parsers(sub)
+    add_alert_parsers(sub)
 
     args = parser.parse_args()
     return args.func(args)

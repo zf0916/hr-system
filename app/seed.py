@@ -8,6 +8,7 @@ protocol being unverified is survivable.
 import datetime as dt
 
 from app.models import (
+    AlertSetting,
     AttendanceStatus,
     CorrectionReason,
     Device,
@@ -192,6 +193,30 @@ SHEET_SETTINGS = [
 ]
 
 
+# SPEC §9 A43-A45. The alert's thresholds, and what it is allowed to alarm
+# about. All rows: the right numbers are guesses until the factory has run on
+# them, and a wrong one is an UPDATE.
+ALERT_SETTINGS = [
+    ("alert.contact_silence_minutes", "15",
+     "A43 — the device polls every 10 seconds (the Delay option row), so 15 "
+     "minutes is about 90 missed polls. Contact silence means the device is "
+     "off, the network is down, or the Cloud Server setting moved (SPEC §10)"),
+    ("alert.punch_silence_minutes", "180",
+     "A44 — how long a running shift may produce no punch at all before that "
+     "is a warning"),
+    ("alert.punch_expected_after_minutes", "60",
+     "A44 — how long after a shift starts punches are expected. Before this, "
+     "an empty shift is normal rather than suspicious"),
+    ("alert.check_punches_when_closed", "no",
+     "A44 — a rest day or a holiday the factory closes for produces no "
+     "punches by design. Contact is still checked on those days"),
+    ("alert.watch_only_after_first_contact", "yes",
+     "A45 — a serial on the allowlist that has never been heard from is not "
+     "an outage. Otherwise adding a device raises an alert until it is "
+     "installed"),
+]
+
+
 def seed(session) -> None:
     for serial, label, note in DEVICES:
         session.add(Device(serial_number=serial, label=label, note=note))
@@ -219,4 +244,6 @@ def seed(session) -> None:
         session.add(AttendanceStatus(code=code, label=label, note=note))
     for key, value, note in SHEET_SETTINGS:
         session.add(SheetSetting(key=key, value=value, note=note))
+    for key, value, note in ALERT_SETTINGS:
+        session.add(AlertSetting(key=key, value=value, note=note))
     session.commit()

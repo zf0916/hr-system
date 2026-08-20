@@ -42,7 +42,7 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 |**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it — **built; the rows exist and a total is a query away**|
 |**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7) — **built; leave codes wait on step 5**|
 |**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device|
-|**9**|**Ingestion alert** — warns when punches stop arriving|Silence for N hours raises a warning|
+|**9**|**Ingestion alert** — warns when punches stop arriving|Silence for N hours raises a warning — **built; contact silence and punch silence are separate, both rows**|
 
 **Then: demo to HR, walking the assumed values line by line while the software is on screen.**
 
@@ -65,6 +65,18 @@ Deliberately not in step 2: no employee screen, no push to the device, no leave,
 **Every schedule and every holiday now in the database is marked provisional.** The 2026 list is still parked. `fixtures/holidays_provisional_2026.xlsx` carries only holidays whose dates are fixed by the calendar — Hari Raya, Chinese New Year, Deepavali, Wesak and Thaipusam are deliberately absent, because a plausible wrong date is worse than a missing one.
 
 Deliberately not in step 3: no late minutes, no daily attendance, no sheet.
+
+**Step 9 is built.** `hr alert check` watches every serial on the allowlist and reports **two silences, never one**: contact silence, which means the device is off, the network is down or the Cloud Server setting moved, and punch silence, which only counts while a shift is running on a day the calendar says the factory is open. A single "time since the last punch" would alarm every weekend and stay quiet when the receiver is unplugged on a public holiday.
+
+**Where the warning goes:** the check is silent when all is well and **exits 2 when it is not**, so the transport is a cron entry or a systemd timer on the host — no daemon, no dependency, and nobody has to be looking at a screen. `ingestion_alert` records the transitions, raised and cleared, so an outage has a start, an end and a length. `--status-file` writes the current state for a monitoring agent if the site ever grows one. **The notification channel is not this** — Telegram and WhatsApp stay parked for the supervisors and Milestone 5.
+
+**The alert reads the database and never asks the device anything**, which is what lets it answer during the outage it exists to catch. `tools/alert_gate.py` is 44 checks, including that `app/alert.py` imports no HTTP client, no mail client and no subprocess — checked on the imports, not on the prose.
+
+**Two things the real run found, and neither was staged.**
+
+**The device has been unreachable since 04:38 UTC.** The alert caught it the moment the device was added to the allowlist: 229 minutes of contact silence, plus punch silence because a shift was nominally running. The receiver is up and answers locally; **the Windows port proxy that carries `192.168.60.50:8081` into WSL2 is gone** — `netsh interface portproxy show all` is empty. This repo already warned about exactly that ("Going live", Prepare). It is the failure mode SPEC §10 describes, and it is the first time anything has caught it.
+
+**The real device was never on the allowlist.** Only the simulator was, so nothing watched the device that matters — it captured perfectly for days and its four-hour outage raised nothing. `hr devices add` puts a serial on the list and `hr devices list` says when each was last heard from; the check now also reports serials that have pushed and are not on the list, because that hole is quiet by construction.
 
 **Step 7 is built.** One render, two outputs. `app/sheet.py` builds the sheet once from the daily rows and both emitters draw that same object — `to_text` for the screen, which is the system, and `to_excel` for the file, which is the record HR files (SPEC §7). Every mark a reader can see is decided in the render and carried on the cell; the emitters pick fonts and column widths and nothing else. **The file and the screen cannot disagree about a day**, and the gate proves it by writing the file from one render and comparing it against a second render deliberately made to differ.
 
@@ -117,6 +129,13 @@ Run it:
     uv run python tools/corrections_gate.py   # must exit 0
     uv run python tools/attendance_gate.py    # must exit 0
     uv run python tools/sheet_gate.py         # must exit 0
+    uv run python tools/alert_gate.py         # must exit 0
+
+    hr devices add --serial PYA8262300072 --label "SenseFace 4A, main door"
+    hr devices list
+    hr alert check --verbose        # silent and 0 when well, loud and 2 when not
+    hr alert history
+    */5 * * * * docker compose exec -T api hr alert check   # the transport
 
     hr sheet render --month 2026-08
     hr sheet export --month 2026-08 --out /tmp/attendance_2026-08.xlsx
@@ -310,6 +329,10 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**How is a mistaken correction undone?** A guard entry made for the wrong employee cannot be edited or deleted, and SPEC §3 does not say what should replace it|HR, then management|Corrections|
 |**How often does a missed punch actually happen?** It decides whether a signed slip is a formality or whether the real question is enrollment quality|HR|The correction evidence decision|
 |**When is the Excel sheet printed and filed?** Monthly on a period boundary is the assumption. Does not block the build|HR|Nothing structural|
+|**How long may the device be silent before somebody should be told** (SPEC §9 A43)? 15 minutes is the assumption, against a device that polls every 10 seconds|Zi Fong, then HR|Nothing — it is a row|
+|**How long into a running shift is no punch at all a fault** (SPEC §9 A44)? 60 minutes before a punch is due and 180 minutes of silence is the assumption. A slow start and a genuine fault look the same until HR says where the line is|HR|Nothing — it is a row|
+|**Who receives the alert, and how, once the site has a real monitoring path?** Today it is a scheduled job that exits non-zero and writes a status file. This is HR-facing infrastructure and is deliberately not the supervisors' notification channel|Zi Fong, then management|Nothing — the transport is one line of cron|
+|**Should a serial that pushes but is not on the allowlist raise an alarm, or stay a notice?** It is a notice today, because a stray probe should not page anybody — but it is also how a real device went unwatched for four hours|Zi Fong|Nothing structural|
 |**What does a cell show when both the arrival and the departure are outside the schedule** (SPEC §9 A38)? The sheet writes both times, slash-separated. Early departure is named in §8 and defined nowhere|HR|The sheet's cells|
 |**Does any group rest on a day other than Sunday** (SPEC §9 A42)? If one does, a column stops shading wholly, and the sheet reports it rather than shading part of one|HR|Whole-column shading|
 |Confirm the site timezone (SPEC §9 A32), and that a PIN is never reassigned to another employee while old punches still matter (A33)|Zi Fong / HR|Corrections, daily attendance|
