@@ -261,13 +261,12 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A15|Half day stored as 0.5|
 |A19|Device PIN equals the employee number — **it cannot be the padded form: the device refuses a leading zero (§10), so a padded number and its PIN differ by that zero**|
 |A25|The guard can reach the application where failures happen|
-|A26|**What we answer the handshake with** — Stamp, OpStamp, ErrorDelay, Delay, TransTimes, TransInterval, TransFlag, TimeZone, Realtime, Encrypt — is accepted and acted on. Still untested|
-|A27|An ATTLOG body decodes as UTF-8, else GBK, else Latin-1. Still open: the captured bodies decoded as UTF-8 cleanly, but every field in them was ASCII and Name was empty|
+|A27|An ATTLOG body decodes as UTF-8, else GBK, else Latin-1. Still open after two captures: every byte in both was ASCII, and `Name` was empty in both|
 |A28|An employee number's matching key is the number padded on the left to 4 characters with zeros|
 |A29|An employee number is exactly 4 digits; anything else stops an import until it is accepted deliberately|
 |A30|A punch belongs to an attendance day if it falls within 240 minutes before that day's shift start or 240 minutes after its end|
 |A31|Which group runs which shift — DAY-PROD day, NIGHT-PROD night, OFFICE day with the office break|
-|A32|The site's timezone is Asia/Kuala_Lumpur, and a guard entry's server stamp is read as a local punch time through it|
+|A32|The site's timezone is Asia/Kuala_Lumpur, and a guard entry's server stamp is read as a local punch time through it. **The device's offset is observed at exactly +8** (§12), which is what that zone produces and what `TimeZone=8` told it|
 |A33|A device punch belongs to the employee its PIN mapped to on the punch's own date, and to the group that employee was in on that date|
 |A34|`~MaxAttLogCount=20`, `~MaxUserCount=80` and `~MaxFingerCount=80` in the device's option push are **per-push batch limits, not storage limits**|
 
@@ -281,9 +280,11 @@ A30 is the width of the attendance-day window, and it is per schedule row. It is
 
 A28 and A29 are the employee number's shape and its key. §2 settles that the stored number is never padded or stripped and that a separate key does the matching; it does not settle what a number may look like, and BUILD.md parks that question. Both are rows, so correcting them is an UPDATE and a rekey — no stored number is touched.
 
-A26 and A27 are the two the receiver itself runs on, and **the first capture answered neither.** A26 is what *we* send the device in the handshake reply; the script that took the capture sent nothing at all, and the device pushing its own option set to us (`table=options`, §12) is the opposite direction and does not answer it. A27 stayed untested for want of a non-ASCII byte. Both are rows, so a conforming handshake and the first body with a real name in it correct them with an UPDATE.
+**A26 is answered and gone.** It was what *we* send the device in the handshake reply. The receiver sent all ten option lines, the device accepted them without complaint and carried on pushing, and §12 now records the set as observed. The rows did not change; what changed is that they are no longer a guess.
 
-A34 comes from that same option push, and it contradicts the datasheet by orders of magnitude — 20 attendance records against 200,000, 80 users against 8,000. Reading the small numbers as how much the device moves in one exchange, rather than how much it can hold, is the assumption. **It matters at step 8, where users are pushed to the device**: a batch limit means chunking the queue, a storage limit would mean the device cannot hold the workforce. The datasheet says it can.
+A27 is the one the receiver still runs on blind. Two captures, and every byte in both was ASCII with an empty `Name` field, so nothing has exercised the fallback chain. **It settles the first time a name that is not Latin is enrolled on the device**, and not before. It is a row, so that day is an UPDATE.
+
+A34 comes from the option push, and it contradicts the datasheet by orders of magnitude — 20 attendance records against 200,000, 80 users against 8,000. Reading the small numbers as how much the device moves in one exchange, rather than how much it can hold, is the assumption. **It matters at step 8, where users are pushed to the device**: a batch limit means chunking the queue, a storage limit would mean the device cannot hold the workforce. The datasheet says it can. **The same push weakens the simple reading**: `~MaxFaceCount=6000` and `~MaxUserPhotoCount=8000` in the same line *do* match the datasheet, so the three small numbers are not one convention applied throughout. It stays an assumption with a question against it.
 
 ---
 
@@ -305,6 +306,10 @@ A34 comes from that same option push, and it contradicts the datasheet by orders
 Capacity, from the manufacturer's datasheet: 8,000 users · 8,000 fingerprint templates · 6,000 face templates · 200,000 transaction records · user ID up to 14 digits. **Headcount is not a constraint.** The device's own option push reports far smaller numbers, which is §9 A34.
 
 **The device refuses a leading zero in a user ID.** Observed at enrollment. `0090` cannot be a PIN; §2 and the dated device-user mapping are where that is handled.
+
+**The device suppresses a repeat verification from the same user within a fixed interval.** Observed: a second attempt inside the window is refused at the reader and **never sent** — nothing arrives, so nothing is missing from the raw layer either. Face, then fingerprint five seconds later, was refused the same way, so **the window is per user, not per method.** The interval's value has not been read off the device menu and is parked.
+
+**That interval is the floor on how close two genuine punches can be.** It matters where two are legitimately close together — an employee leaving on a gate pass and coming back inside the window has no second punch, and the return is a paper time HR types (§5), not a punch that went missing.
 
 ### Rules
 
@@ -354,38 +359,65 @@ The device is the HTTP client. It pushes; we never poll. All routes under `/iclo
 |Route|Response body|Seen|
 |---|---|---|
 |`GET /iclock/cdata?SN=&options=all&pushver=&language=`|`GET OPTION FROM: {SN}` then `Key=Value` lines|Observed. The query also carries `DeviceType=att` and `PushOptionsFlag=1`|
-|`POST /iclock/cdata?SN=&table=ATTLOG&Stamp=`|`OK: {n}`|Observed. `Stamp=`, as written|
+|`POST /iclock/cdata?SN=&table=ATTLOG&Stamp=`|`OK: {n}`|Observed. `Stamp=`, as written — **and its value is the one we handed the device in the handshake reply**|
 |`POST /iclock/cdata?SN=&table=OPERLOG&OpStamp=`|`OK`|Observed. **`OpStamp=`, not `Stamp=`** — the two tables name their cursor differently|
-|`GET /iclock/getrequest?SN=`|`OK`, or `C:{id}:{CMD}`|Observed. **The first poll after a handshake also carries `INFO=`** — firmware version, the device's IP, and record counts|
+|`GET /iclock/getrequest?SN=`|`OK`, or `C:{id}:{CMD}`|Observed. **The first poll after a handshake also carries `INFO=`** — firmware version, the device's IP, and counts, comma-separated|
 |`POST /iclock/cdata?SN=&table=options`|`OK`|Observed, and **not in any material in hand**: the device POSTs its whole option set to us|
 |`POST /iclock/cdata?SN=&table=BIODATA`|`OK`|Observed, and also undocumented here: biometric templates, base64|
 |`POST /iclock/devicecmd?SN=`|`OK`|Not seen — nothing was queued|
 |`POST /iclock/cdata?SN=&table=ATTPHOTO`, `POST /iclock/fdata`|`OK`|Not seen|
 |catch-all `/iclock/{rest:path}`|`OK`|**This is what absorbed `options` and `BIODATA`** — see below|
 
+**The handshake reply, observed and accepted.** The device asked with `SN`, `options=all`, `language=69`, `pushver=2.4.1`, `DeviceType=att`, `PushOptionsFlag=1`. The receiver answered `GET OPTION FROM: {SN}` and these ten option lines, and **the device accepted them without complaint and carried on pushing normally**:
+
+|Option|Value sent|
+|---|---|
+|`Stamp`, `OpStamp`|`9999` — see the note on cursors below|
+|`ErrorDelay`|`30`|
+|`Delay`|`10`|
+|`TransTimes`|`00:00;14:05`|
+|`TransInterval`|`1`|
+|`TransFlag`|`1111000000`|
+|`TimeZone`|`8`|
+|`Realtime`|`1`|
+|`Encrypt`|`0`|
+
+**`Realtime=1` is why punches arrive within seconds** rather than on the `TransTimes` schedule. Every one of these is a row, so changing what the device is told is an UPDATE (§9 had this as A26; the capture answered it).
+
+**`Stamp` and `OpStamp` are meant to be cursors, and ours are fixed rows at `9999`.** The device echoes the value straight back on its next push — `Stamp=9999` on ATTLOG, `OpStamp=9999` on OPERLOG — so what is in the raw layer is our own number returning, not something the device chose. It costs nothing here, because the device deletes each record once it is acknowledged and never asks for it again. What a moving cursor would change is parked in BUILD.md, not designed here.
+
 **Two tables arrived that this section did not name, and nothing had to be built for them.** `options` and `BIODATA` were answered `OK` by a fall-through and stored whole. In the receiver that fall-through is `POST /iclock/cdata`'s unrecognised-table branch rather than the catch-all route itself, but it is the same rule doing the work: **an undocumented table or route still gets `200 OK` and still lands in the raw layer.** That is exactly what the catch-all exists for, and it earned its place the first time real traffic arrived.
 
-Punch line, tab-separated: `pin, YYYY-MM-DD HH:MM:SS, status, verify, workcode, reserved, reserved`
+**Punch line, observed: ten tab-separated fields and a trailing tab.**
+
+    1 <tab> 2026-08-20 11:27:27 <tab> 255 <tab> 15 <tab> 0 <tab> 0 <tab> 0 <tab> 0 <tab> 0 <tab> 0 <tab>
+
+`pin`, `YYYY-MM-DD HH:MM:SS`, `status`, `verify`, then **six more fields, every one of them `0` in every line captured, and a trailing tab after the last.** Their meaning is unknown and they are deliberately not named here — a name guessed from documentation is what put a wrong seven-field line in this section in the first place. **The trailing tab means a split on tabs yields eleven pieces, the last one empty.**
 
 **The verify field shows the method. Confirmed physically: `15` face, `1` fingerprint** — both tested at the device. This is the field the password-punch count reads (§10).
+
+**Device time carries no offset, and the offset is `+8`, observed.** The device sent `2026-08-20 11:27:27` with no marker of any kind; the server stamped the arrival at `03:27:27+00:00`. Exactly eight hours, consistent with the `TimeZone=8` the receiver sent it. **This is the case that "stored as sent, never converted on the way in" (§14) exists for**: the string is kept, the arrival instant is kept beside it, and the difference is a fact anybody can re-derive rather than a conversion nobody can undo. It is also how clock drift will show (§10). See §9 A32.
 
 **Status was `255` on every punch, and that is settled rather than unverified.** The device is not labelling in versus out. Punch state options are off by default on this model and are staying off, so **first in and last out come from the times alone** — which is what §3 already does. Nothing downstream reads status.
 
 ### What has been captured, and how far it can be trusted
 
-**Real traffic from the device has been captured, and every line above marked _Observed_ comes from it** — the device in §10, serial `PYA8262300072`.
+**Every line above marked _Observed_ comes from real traffic from the device in §10, serial `PYA8262300072`.** There have been two captures.
 
-**It was observed once, against a non-conforming server, and it is not fully authoritative.** The capture was taken with a throwaway FastAPI script outside this repo, not the receiver. It answered the handshake with a bare `OK` instead of the `Key=Value` option lines this section specifies. The device carried on and pushed everything anyway, using `Stamp=9999` and `OpStamp=9999` — placeholders, because no stamp was ever issued. **The script answered `OK` to those pushes as well, so the device cleared the records from its own memory, and nothing reached the raw layer.** Those punches, operations and templates are gone.
+**The first capture stored nothing.** It was taken with a throwaway FastAPI script outside this repo, which answered the handshake with a bare `OK` instead of option lines, and answered `OK` to every push — so the device cleared those records from its own memory and none of it reached the raw layer. Those punches, operations and templates are gone. It is the argument for the raw layer: a server that stores nothing let the device throw its own records away.
 
-What that separates:
+**The second capture is through the receiver and is kept.** It is `raw_request` 96–115: a handshake and its reply, the option push, `INFO` on the following poll, two OPERLOG pushes, two ATTLOG pushes, and the polls between them. **It is replayable, so every line drawn from it can be checked against the bytes rather than against a note.**
 
-- **Facts about this firmware:** the routes, the query parameters, the two extra tables, the verify codes, the status value.
-- **Not facts:** the stamp values. `9999` is what the device sends when no stamp was ever issued, and says nothing about what it sends against a server that issues one.
-- **Not tested at all:** the handshake reply (§9 A26) — the script sent no options — and any non-ASCII body (§9 A27).
+**Corrected, and it was worth correcting:** an earlier version of this note said the device sent `Stamp=9999` and `OpStamp=9999` as placeholders because no stamp had been issued. That was wrong. **`9999` is ours** — the receiver's own seeded option rows sent it in the handshake reply, and the device echoed it back on the next push. Nothing about the stamp was ever the device's choice.
 
-One device, one session. The vendor spec is still not in hand. **The re-capture that matters is through the receiver, which answers the handshake as this section specifies and keeps every request in the raw layer** — and this section gets updated in the same task.
+What is still not settled:
 
-**Raw capture is what makes building on it acceptable.** Every request is stored whole before anything parses it, so a wrong assumption costs a replay rather than lost punches. **This is the reason the raw layer exists, and why it is never validated or filtered.** The first capture is the argument for it: a server that stores nothing let the device throw its own records away.
+- **Only one device, and only two sessions.** The vendor spec is still not in hand.
+- **A moving cursor.** `Stamp` and `OpStamp` have only ever been `9999`, because that is what we send. Parked in BUILD.md.
+- **Anything non-ASCII** (§9 A27). Both captures were ASCII end to end, and the `Name` field was empty in both.
+- **Fields five to ten of the punch line**, which have only ever been `0`.
+
+**Raw capture is what makes building on it acceptable.** Every request is stored whole before anything parses it, so a wrong assumption costs a replay rather than lost punches. **This is the reason the raw layer exists, and why it is never validated or filtered.**
 
 **Absolute rules on `/iclock/` routes**
 
@@ -393,6 +425,7 @@ One device, one session. The vendor spec is still not in hand. **The re-capture 
 - Trailing-slash redirects are on by default in the framework and must be turned off — **and the catch-all route kept. Neither alone is enough.**
 - No exception handler that returns JSON. No request-body validation — bodies are tab-separated text or raw binary, and a validation failure produces an error status.
 - **No auth middleware.** The protocol has no credential mechanism. Access control is network position: device on an isolated segment, firewall permitting only its address, serial-number allowlist that logs unknown serials and still returns `200 OK`. Plain HTTP.
+- **The application cannot see the device's address, so address filtering has to be at the firewall.** Observed: every request arrives from `172.21.0.1`, the Docker bridge gateway, never from the device's own `192.168.60.165`. The device's real address appears only as a field *inside* the options body and the `INFO` string — data, not request metadata. This does not change the rule above; it makes it the only option. **An address check written in the application would either pass everything or fail everything.**
 - **Never routed through the tunnel, never exposed beyond the LAN.**
 - **Never decode the body at capture.** Store bytes — name fields are GBK on many firmware builds. Decode in the parser.
 - **A parse failure never affects the response.** Store, respond `OK`, log it.

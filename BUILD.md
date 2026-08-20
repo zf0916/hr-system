@@ -52,7 +52,7 @@ The only thing actually blocking the build is **the employee list** — number, 
 
 **Step 1 is built.** The receiver (every route in SPEC.md §12), the raw request layer, the punch parsing layer and the device simulator. Steps 3–9 not started.
 
-The simulator runs a full push cycle and exits clean. Each of these was then broken on purpose and the simulator failed on every one: the catch-all route removed, trailing-slash redirects left on, an auth check added, the raw layer deduplicating, the body decoded at capture, FastAPI's own JSON error page reaching the device, and the parser raising on every line. The parser one is the interesting failure — every response stayed `200 OK: {n}` and only the parsed layer went empty, which is the rule §12 asks for.
+The simulator runs a full push cycle and exits clean. Its handshake query, option set, punch line and OPERLOG cursor parameter are copied from the second capture. **Deleting the `Realtime` option row made it fail on two checks and exit 1** — the handshake is now gated on the option set the real device accepted, not just on the lines being `Key=Value`. Each of these was also broken on purpose, and the simulator failed on every one: the catch-all route removed, trailing-slash redirects left on, an auth check added, the raw layer deduplicating, the body decoded at capture, FastAPI's own JSON error page reaching the device, and the parser raising on every line. The parser one is the interesting failure — every response stayed `200 OK: {n}` and only the parsed layer went empty, which is the rule §12 asks for.
 
 **Step 2 is built and is not done.** Its done-when is "a real employee list loads", and the list does not exist yet. What exists: the employee model, effective-dated; the device-PIN mapping in its own dated table; an Excel importer driven by an explicit mapping file; a committed fixture spreadsheet; and a gate of 24 deliberate mistakes, all of which the importer refuses. When HR's file arrives, step 2 finishes by writing a mapping file for it — no code change, unless the file carries a field the model has no room for.
 
@@ -120,29 +120,40 @@ What the first capture settled: OPERLOG names its cursor `OpStamp`, the handshak
 
 **A21 is answered and deleted** (SPEC §9): the device refuses a leading zero in a user ID, so the question of whether it pushes `0090` or `90` never arises. No code changed — §13 and the dated device-user mapping already covered it.
 
-**The device is already reaching the receiver.** With the stack up on 8081 it polls `GET /iclock/getrequest?SN=PYA8262300072` every few seconds — `iClock Proxy/1.09`, `Host: 192.168.60.50:8081` — and every poll is in the raw layer, readable with `hr raw`. **Nothing else has arrived from it yet**: no handshake since the receiver came up, so no option lines have been answered and A26 is still untested, and no punches, so the parsed layer holds only simulator rows.
+**The second capture is through the receiver and is kept: `raw_request` 96–115.** A handshake and the ten option lines the receiver answered it with, the device's own option push, `INFO` on the next poll, two OPERLOG pushes, two real punches, and the polls between them. The device polls every few seconds — `iClock Proxy/1.09`, `Host: 192.168.60.50:8081` — and everything it sends is in the raw layer, readable with `hr raw` and replayable. SPEC §12 is rewritten against those bytes.
+
+**The parser does not accept the real punch line yet, and that is the next step.** It expects the seven fields §12 used to claim; the device sends ten and a trailing tab. Both real punches are stored — `raw_request` 96 and 109, and `parsed_punch` rows carrying pin, time, status and verify — but flagged `parse_ok = false`, `expected 7 fields, got 11`. **Nothing is lost:** the raw layer has the bytes, and a parser version bump plus `hr replay` turns them into clean rows without the device being involved. Until that happens, no real punch counts as parsed.
 
 Artifacts received and analysed: daily attendance sheet, late coming summary and deduction record, individual time-off record, time-off salary summary, SQL Account payroll entry screen, **leave card** — HR's per-employee leave ledger, kept by hand and not in the repo, since it carries a real employee's name and join date. What it settled is in SPEC §6 and §2.
 
 **Leave application form** — the two leave vocabularies and the approval chain, SPEC §6. **Gate pass** — category, destination, out and in times, four signatures, and who fills the times, SPEC §5. Both were photographed blank, with no employee data on them, and **the photographs are not in the repo**: they are not source, and what they settled is in SPEC.
 
-**Most of the protocol contract is now observed once, and none of it twice** — see SPEC.md §12, where each line says which. The simulator still only tests that the receiver behaves as the contract says, not that the contract is right.
+**Most of the protocol contract is now observed, and the second capture is the one that is kept** — see SPEC.md §12, where each line says what was seen and what was not. The simulator still only tests that the receiver behaves as the contract says, not that the contract is right; what changed is that its shapes are now copied from real bytes rather than from documentation.
 
 ---
 
-## The re-capture — a gate on §12 and the parser only
+## What the second capture settled
 
-**Nothing else waits for it.** Steps 2 onward are built without the device; the simulator stands in for it.
+Through the receiver, kept as `raw_request` 96–115. Every line here can be checked against the bytes.
 
-The first capture converted most of SPEC.md §12 into observed fact, but stored nothing (above). **The re-capture runs the receiver, which keeps what arrives.**
+**Settled**
 
-1. Run the receiver on the LAN, port 8081 — where the device already points.
-2. Punch a few times, face and fingerprint both.
-3. `hr raw` to watch it land, then `hr replay` to rebuild the parsed layer from it.
+- **A26 is answered and deleted.** The receiver sent all ten option lines and the device accepted them and carried on pushing. SPEC §12 records the set as observed, and `Realtime=1` is why punches arrive within seconds rather than on the `TransTimes` schedule.
+- **The punch line is ten tab-separated fields and a trailing tab**, not the seven §12 claimed. Fields five to ten were `0` in every line, so they are recorded as unknown rather than named.
+- **The device's clock offset is exactly +8** against the server's arrival stamp, matching the `TimeZone=8` it was sent.
+- **`Stamp=9999` was never the device's choice — it is ours**, echoed back from the handshake reply. The earlier note in SPEC §12 said otherwise and has been corrected.
+- **OPERLOG's cursor parameter is `OpStamp`**, confirmed a second time.
+- **The application cannot see the device's address.** Everything arrives from the Docker bridge gateway; the device's own address is a field inside the options body. Address filtering has to be at the firewall.
+- **The device suppresses a repeat verification from the same user within a fixed interval**, per user and not per method — a second attempt never reaches the receiver at all (SPEC §10).
 
-What only a conforming handshake can settle: **whether the device accepts and acts on the option lines the receiver sends** (SPEC §9 A26), and **what stamp values it then uses** — `Stamp=9999` and `OpStamp=9999` were placeholders because the throwaway script issued none. A body with a non-ASCII name in it settles A27; nothing captured so far had one.
+**Not settled**
 
-Still owed at the device menus: register the super administrator, set verify mode to face and fingerprint only, check whether USB user import exists.
+- **A27.** Every byte of both captures was ASCII and `Name` was empty in both. It settles the first time a non-Latin name is enrolled, and not before.
+- **A moving stamp cursor.** Ours is a row fixed at `9999`.
+- **The suppression interval's value**, which has not been read off the device menu.
+- **A34**, the small `~Max...` numbers in the option push.
+
+**Still owed at the device menus:** register the super administrator, set verify mode to face and fingerprint only, check whether USB user import exists.
 
 ---
 
@@ -246,8 +257,9 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |Can floor workers use a web form, in which languages, and is a kiosk needed?|HR|Milestone 5|
 |**Privacy handling for passport, IC and medical data** — encryption, retention, access logging|Management|Milestone 4|
 |**ADMS protocol spec**|ZKTeco supplier|Confirms §12|
-|Which `Key=Value` options does the device accept in the handshake, and what does it do with each? Read them off the first real handshake (SPEC §9 A26)|The device, then ZKTeco supplier|Nothing structural — they are rows|
-|Which encoding does this firmware send ATTLOG and OPERLOG bodies in (SPEC §9 A27)? **The captured bodies were all ASCII with an empty Name field, so this is still open**|The first real capture|Nothing structural — it is a row|
+|Which encoding does this firmware send ATTLOG and OPERLOG bodies in (SPEC §9 A27)? **Both captures were ASCII end to end with an empty Name field. It settles the first time a non-Latin name is enrolled on the device, not before**|The first non-Latin enrollment|Nothing structural — it is a row|
+|**What would a real `Stamp` / `OpStamp` cursor change?** Ours is a row fixed at `9999` and the device echoes it back; it costs nothing today because the device deletes each record once acknowledged (SPEC §12)|ZKTeco supplier|Nothing yet|
+|**Read the repeat-verification interval off the device menu** (SPEC §10). It is the floor on how close two genuine punches can be, which matters for a gate pass return|Zi Fong, at the device|Daily attendance, time off|
 |**Are `~MaxAttLogCount=20`, `~MaxUserCount=80` and `~MaxFingerCount=80` per-push batch limits or storage limits** (SPEC §9 A34)? They contradict the datasheet by orders of magnitude|ZKTeco supplier, or the first push of users|Step 8, pushing users to the device|
 
 **Artifacts still wanted**

@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Device simulator — pushes at the receiver the way the firmware would.
 
-It is not a test of whether SPEC.md §12 is right. Nothing in §12 has been
-verified against real hardware, and only real traffic settles that (BUILD.md).
+It is not a test of whether SPEC.md §12 is right. **Most of §12 is now observed
+against the real device** (raw_request 96-115, the second capture), and the
+shapes below are copied from those bytes: the handshake query and its option
+lines from request 101, the punch line from request 109, the OPERLOG cursor
+parameter from requests 97 and 106. What is still unobserved is marked where it
+is used. Only real traffic settles the rest (BUILD.md).
+
 This checks that the receiver behaves the way §12 says the firmware needs it
 to, and it fails on anything the firmware would reject:
 
@@ -32,23 +37,41 @@ from urllib.parse import urlencode
 SN = "SIM0000000001"
 UNKNOWN_SN = "NOTALLOWLISTED9"
 
-# SPEC §12: pin, YYYY-MM-DD HH:MM:SS, status, verify, workcode, reserved, reserved
+# The ten options the real device was sent and accepted (raw_request 101).
+ACCEPTED_OPTIONS = {
+    "Stamp", "OpStamp", "ErrorDelay", "Delay", "TransTimes", "TransInterval",
+    "TransFlag", "TimeZone", "Realtime", "Encrypt",
+}
+
+# SPEC §12, observed in raw_request 109: pin, time, status, verify, then six
+# fields that were 0 in every line captured, then a trailing tab. Status 255 and
+# verify 15 (face) / 1 (fingerprint) are what the device actually sends.
+#
+# The leading-zero PINs here are not what this device can hold — it refuses a
+# leading zero in a user ID (SPEC §10) — but the receiver must store whatever
+# arrives verbatim, and that rule is what these lines exercise.
 PUNCHES = [
-    ("0090", "2026-08-18 07:58:11", "0", "1", "0", "0", "0"),
-    ("0657", "2026-08-18 07:59:02", "0", "15", "0", "0", "0"),
-    ("1627", "2026-08-18 08:03:47", "0", "1", "0", "0", "0"),
-    ("0090", "2026-08-18 17:31:20", "1", "1", "0", "0", "0"),
+    ("0090", "2026-08-18 07:58:11", "255", "1", "0", "0", "0", "0", "0", "0"),
+    ("0657", "2026-08-18 07:59:02", "255", "15", "0", "0", "0", "0", "0", "0"),
+    ("1627", "2026-08-18 08:03:47", "255", "1", "0", "0", "0", "0", "0", "0"),
+    ("0090", "2026-08-18 17:31:20", "255", "1", "0", "0", "0", "0", "0", "0"),
 ]
 
 
 def attlog_body(rows) -> bytes:
-    return ("\r\n".join("\t".join(r) for r in rows) + "\r\n").encode("ascii")
+    """One line per punch, each ending in the trailing tab the device sends."""
+    return ("\r\n".join("\t".join(r) + "\t" for r in rows) + "\r\n").encode("ascii")
 
 
 BATCH = attlog_body(PUNCHES)
 
-# A name field in GBK, which is what many firmware builds send. The receiver
-# must never decode this at capture (SPEC §12).
+# What the device actually sent, from raw_request 97 and 106: an OPLOG line,
+# tab-separated, ASCII, and no trailing newline.
+OPERLOG_OBSERVED = b"OPLOG 4\t1\t2026-08-20 11:26:07\t1\t0\t0\t0"
+
+# A name field in GBK, which is what many firmware builds send. Nothing captured
+# so far has a non-ASCII byte in it (SPEC §9 A27), so this case is the only
+# thing exercising the rule that the receiver never decodes at capture.
 OPERLOG_BODY = (
     "OPLOG 4\t0\t2026-08-18 08:05:00\t0\t0\t0\r\n"
     "USER PIN=0090\tName=" + "陈志峰" + "\tPri=0\tPasswd=\tCard=\tGrp=1\tTZ=0000000100000000\r\n"
@@ -162,8 +185,10 @@ def run_cycle(sim: Sim) -> None:
     """One full cycle, in the order a device does it after power-on."""
 
     print("\n-- handshake (GET /iclock/cdata, options=all)")
+    # The query the device sends, parameter for parameter (raw_request 101).
     r = sim.send("GET", "/iclock/cdata",
-                 {"SN": SN, "options": "all", "pushver": "2.4.1", "language": "69"},
+                 {"SN": SN, "options": "all", "language": "69", "pushver": "2.4.1",
+                  "DeviceType": "att", "PushOptionsFlag": "1"},
                  content_type=None)
     sim.firmware_accepts("handshake", r)
     lines = r.text.replace("\r\n", "\n").strip().split("\n")
@@ -171,6 +196,15 @@ def run_cycle(sim: Sim) -> None:
               f"got {lines[0]!r}")
     sim.check(len(lines) > 1 and all("=" in line for line in lines[1:]),
               "handshake: Key=Value lines follow", f"got {lines[1:]!r}")
+    # The set the real device accepted without complaint (raw_request 101). A
+    # missing option is a row missing from device_option, which is how the
+    # receiver would go quiet about something the device was told before.
+    keys = {line.split("=", 1)[0] for line in lines[1:]}
+    sim.check(ACCEPTED_OPTIONS <= keys,
+              "handshake: every option the device accepted is still sent",
+              f"missing {sorted(ACCEPTED_OPTIONS - keys)}")
+    sim.check("Realtime=1" in lines[1:],
+              "handshake: Realtime=1, which is why punches arrive in seconds")
 
     print("\n-- poll for commands (GET /iclock/getrequest)")
     r = sim.send("GET", "/iclock/getrequest", {"SN": SN}, content_type=None)
@@ -191,11 +225,17 @@ def run_cycle(sim: Sim) -> None:
     sim.firmware_accepts("attlog duplicate", r)
     sim.expect_body("attlog duplicate", r, f"OK: {len(PUNCHES)}")
 
-    print("\n-- GBK OPERLOG body")
+    print("\n-- OPERLOG as the device sends it (OpStamp, not Stamp)")
     r = sim.send("POST", "/iclock/cdata",
-                 {"SN": SN, "table": "OPERLOG", "Stamp": "9999"}, OPERLOG_BODY)
+                 {"SN": SN, "table": "OPERLOG", "OpStamp": "9999"}, OPERLOG_OBSERVED)
     sim.firmware_accepts("operlog", r)
     sim.expect_body("operlog", r, "OK")
+
+    print("\n-- GBK OPERLOG body (still unobserved: SPEC §9 A27)")
+    r = sim.send("POST", "/iclock/cdata",
+                 {"SN": SN, "table": "OPERLOG", "OpStamp": "9999"}, OPERLOG_BODY)
+    sim.firmware_accepts("operlog gbk", r)
+    sim.expect_body("operlog gbk", r, "OK")
 
     print("\n-- binary photo (table=ATTPHOTO, then /iclock/fdata)")
     r = sim.send("POST", "/iclock/cdata",
@@ -330,6 +370,16 @@ def check_db(sim: Sim, baseline: int) -> None:
                   f"found {found}")
 
         cur.execute(
+            f"SELECT count(*) FROM raw_request WHERE {mine} AND body = %s "
+            "AND query_string LIKE '%%OpStamp=%%'",
+            (baseline, OPERLOG_OBSERVED),
+        )
+        found = cur.fetchone()[0]
+        sim.check(found == 1,
+                  "OPERLOG stored with the cursor parameter the device sends",
+                  f"found {found}")
+
+        cur.execute(
             f"SELECT count(*) FROM raw_request WHERE {mine} AND body = %s",
             (baseline, PHOTO_BODY),
         )
@@ -352,6 +402,20 @@ def check_db(sim: Sim, baseline: int) -> None:
         )
         sim.check(cur.fetchone()[0] > 0,
                   "a PIN is stored exactly as sent, zeros and all (SPEC §12, §13)")
+
+        # The ten-field line the device really sends. The pin, the time, the
+        # status and the verify method have to survive it whatever the parser
+        # decides about the field count.
+        cur.execute(
+            f"SELECT count(*) FROM parsed_punch WHERE {punches} "
+            "AND pin = %s AND punch_time_text = %s "
+            "AND status_code = '255' AND verify_code = '15'",
+            (baseline, PUNCHES[1][0], PUNCHES[1][1]),
+        )
+        found = cur.fetchone()[0]
+        sim.check(found >= 2,
+                  "the ten-field line yields pin, time, status 255 and verify 15",
+                  f"found {found}")
 
         cur.execute(
             f"SELECT punch_time::text, punch_time_text FROM parsed_punch "
