@@ -224,7 +224,7 @@ Code being ready is not the gate. These are.
 |Decision|Whose|
 |---|---|
 |**Grace period.** The device is stricter than a person reading a card. Identical rules will produce more recorded lateness, and lateness is deducted from pay. Reproducing today's effective strictness needs a grace period; tightening needs a decision and a communication to staff|**Management, not HR**|
-|Who may correct a missed punch, and on what evidence|Management|
+|**Who may correct a missed punch, and on what evidence.** Today the evidence is a supervisor's signature in the punch card slot, and **after cutover there is no card to sign.** The recommendation is a signed slip for Milestone 1, superseded by supervisor confirmation in Milestone 5, which Milestone 4's supervisor relationships make possible. **It does not block the build** — HR retroactive entry from step 4 works without it — but it needs answering before the parallel run ends, because that is when corrections start being real|Management|
 |**Biometric notice to employees**, local and foreign. Required before enrollment, not after|Management|
 |How long raw device data is retained. Face templates and photos land there from the first test push, whatever the wider privacy decision|Management|
 |Whether the guard has a screen where failures happen|Zi Fong, on inspection|
@@ -290,6 +290,8 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**Which group runs which shift** (SPEC §9 A31)? The seeded schedules are provisional and marked so in the database|HR|Schedule|
 |**The group codes themselves are invented.** DAY-PROD, NIGHT-PROD and OFFICE came from the sample spreadsheet, not from HR — they are replaced by whatever the real employee list carries, not corrected|HR|Schedule|
 |**How is a mistaken correction undone?** A guard entry made for the wrong employee cannot be edited or deleted, and SPEC §3 does not say what should replace it|HR, then management|Corrections|
+|**How often does a missed punch actually happen?** It decides whether a signed slip is a formality or whether the real question is enrollment quality|HR|The correction evidence decision|
+|**When is the Excel sheet printed and filed?** Monthly on a period boundary is the assumption. Does not block the build|HR|Nothing structural|
 |Confirm the site timezone (SPEC §9 A32), and that a PIN is never reassigned to another employee while old punches still matter (A33)|Zi Fong / HR|Corrections, daily attendance|
 |**Can SQL Account import a file, or is it keyed by hand?** Sample export if yes|Accounts|Milestone 2 deliverable|
 |What do `DW` `MT` `MR` `CL` `HL` `EX` `PT` `AD` `LS` `OOB` mean, and which are actually used? **`CL`, `HL` and `MT` have candidates by content from the leave application form — Compassionate, Hospitalization, Maternity (SPEC §6). Candidates for Accounts to confirm, not decided**|Accounts|Milestone 2|

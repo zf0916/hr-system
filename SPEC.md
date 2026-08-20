@@ -11,7 +11,7 @@ The database schema is not in this document. Claude Code decides tables from wha
 Today both HR and Accounts read the same punch card, at different times and at different detail.
 
 1. Employees punch a card. The machine prints red when the punch is outside schedule.
-2. **Daily:** HR reads the card and the leave forms, and fills the Daily Workers Attendance sheet by hand — a tick for present, the actual punch time when outside schedule, leave codes. Leave codes also get written onto the card.
+2. HR marks leave codes onto the punch card **a day or two after each form arrives**, and then **transcribes the whole month into the Daily Workers Attendance sheet by hand in one sitting** — a tick for present, the actual punch time when outside schedule, leave codes.
 3. **At cut-off:** Accounts reads the punch card, and HR's reports where they help. **Accounts prioritises the card over the attendance sheet.**
 4. HR separately compiles the late coming and time-off summaries, signs them, and sends them to Accounts for deduction.
 
@@ -235,13 +235,17 @@ The Daily Workers Attendance sheet, in HR's existing layout.
 
 **This is what makes "never annotated by hand" enforceable rather than a preference.** A filed record somebody writes on is precisely the thing this system replaces: the writing is invisible to everything downstream, and the sheet cannot be regenerated without losing it. Because the screen is always regenerable and the file is only ever printed from it, a correction has one place to go — a row — and the filed copy is reprinted rather than amended.
 
+**HR enters everything through the screen. The Excel file is export only and is never re-uploaded or read back in.** The file travels one way. **An edited sheet coming back would put a correction in a cell instead of a row**, which is the whole thing the never-annotated rule exists to prevent — and it would arrive with no author, no reason and no way to rebuild it.
+
+**Because the sheet is generated it is always current, and the monthly fill-in disappears.** Today HR marks leave onto the punch card a day or two after each form arrives, and then transcribes a month of cards and forms into the sheet in one sitting (§1). **That sitting is transcription cost, not a requirement.** Entry timing does not change — the forms still arrive when they arrive and are still entered when they are entered (§6) — but nothing has to be copied anywhere afterwards, and the sheet is readable on any day of the month rather than after it.
+
 - **Generated output. Regenerated on demand. Never annotated by hand or edited in place.** A sheet HR writes on cannot be regenerated without losing what they wrote, and leaves that data invisible to everything downstream.
 - Everything on it comes from stored data: punches, corrections, leave, schedule, calendar.
 - A cell holds **a tick when the punch is on schedule, the actual punch time when it is outside schedule**, or a leave code.
 - Rest days and public holidays shade as whole columns.
 - Manual punches are marked.
 
-**Per-day punch detail is available for any employee and day.** This is what replaces reading the punch card — for HR and for Accounts both.
+**Per-day punch detail is available for any employee and day. This is what replaces reading the punch card, and it is Accounts who needs it most.** One employee, one period, every day of it, in one view: punch times, leave codes, and manual punches marked. **Accounts prioritises the card over the attendance sheet today** (§1), because the card is the primary record and shows the detail; this view is what that preference transfers to.
 
 ---
 
@@ -472,6 +476,7 @@ What is still not settled:
 |Editing punch data to fix a bad punch|Corrections are separate rows|
 |Resolving a device PIN to an employee at capture|Store the string; map downstream|
 |Hand-editing the generated attendance sheet|It cannot then be regenerated|
+|Reading the exported Excel sheet back in|The file goes one way; a returned sheet is a correction in a cell instead of a row|
 |Collapsing "no punch" and "absent"|One is a fact, the other a judgement|
 |A guard-typed punch time|Server-stamped only|
 |An unmarked manual punch|It must be visibly countable|
