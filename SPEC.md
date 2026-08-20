@@ -40,7 +40,8 @@ Today both HR and Accounts read the same punch card, at different times and at d
 - **A device PIN is not an employee number.** It is stored as a string, exactly as the device sends it, with no lookup at capture time.
 - **Employees are created in the application and pushed to the device**, never typed on the device.
 - Schedules and employment status are **effective-dated**. Re-rendering a past period uses the schedule and headcount that were in force then, not today's.
-- **The leave card's "Department" is the attendance sheet's Section.** One field, under two names on two pieces of paper — not a second attribute.
+- **The leave card's and the leave application form's "Department" is the attendance sheet's Section.** One field, under two names on three pieces of paper — not a second attribute.
+- **"Staff number" on the leave application form and the gate pass is the employee number.** Same field, another name.
 
 ---
 
@@ -123,7 +124,18 @@ Public holidays and rest days shade whole columns on the sheet, driven by the ca
 
 ### Time off
 
-- Gate pass records date, reason, from, to, hours taken, employee signature.
+The gate pass carries: employee name, staff number, department, date, a category tick, destination, reason, out time, in time, and four signatures.
+
+|Field|Notes|
+|---|---|
+|Category|One tick of four — **Official · Personal · Medical Treatment · Others**|
+|Destination|Where the employee is going|
+|Out time, in time|Written on the paper form; the hours follow from them|
+|Signatures|**Four, not one** — applicant, immediate supervisor, Head of Dept, HR. The same chain as leave, and it does not differ by category (§6)|
+
+- **Hours are not written on the gate pass.** Out time and in time are, and the hours are computed from the pair. This is the reverse of leave, where the number of days is written on the form and is stored as given, never recomputed (§6).
+- **The out and in times are the guard's on paper and HR's in the system.** The guard fills them in at the gate on the paper form; HR types both when the form is entered. **This is not the guard entry path in §3** — that path corrects a failed biometric punch, is server-stamped, and has no field for a typed time. Two different acts: a gate pass time is HR transcribing an authorised absence off paper, a guard entry is a punch standing in for one the device did not take.
+- **Medical Treatment on the gate pass is the exit authorisation, not the treatment record.** It does not replace the medical treatment slip, and the two are not one entry.
 - **The summary combines gate pass hours and medical treatment slip hours into one total per employee.**
 - Same 30-minute threshold, deducted from the next due salary.
 - Up to 5 treatment slips per employee per month appear on the summary.
@@ -144,7 +156,23 @@ Cut-offs stated on the sheet: time off and late coming close on the 10th, salary
 
 **Leave is entered, never derived.** Today HR writes leave codes onto the punch card at the same moment as attendance. That one combined step becomes two separate ones.
 
-Codes from the sheet legend:
+**There are two leave vocabularies and they are not the same list.** What an employee applies for is on the leave application form. What HR writes on the sheet and the card is the legend code. The form is the request; the legend is the record. **Both are stored, as two separate fields on the leave record, and neither is derived from the other.**
+
+### Applied for — the leave application form
+
+|Type on the form|Notes|
+|---|---|
+|Annual Leave||
+|Sick Leave|Sick certificate attached|
+|Compassionate Leave||
+|Hospitalization||
+|Ind. Accident Leave (SOCSO)||
+|Maternity Leave||
+|Unpaid Leave|Reason required|
+
+The form also carries: staff number, department, date of application, period from, period to, number of days, and the applicant's signature.
+
+### Written on the sheet — codes from the sheet legend
 
 |Code|Meaning|
 |---|---|
@@ -157,12 +185,25 @@ Codes from the sheet legend:
 |SS|Suspended|
 |T / C|Temporary / Contract|
 
+**The two lists do not line up, and that is a fact about the paper, not an open question:**
+
+- **Compassionate Leave, Hospitalization, Ind. Accident Leave (SOCSO) and Maternity Leave have no legend code.** They are applied for and the legend has no letter for them.
+- **EL — emergency leave — has no box on the form.** HR writes it on the sheet; nobody applies for it under that name.
+
+Either field on a leave record can therefore be empty: a form type with no code, or a code HR wrote with no form behind it. **Filling one in from the other would be inventing a mapping that the paper does not contain.**
+
+### Approval
+
+**Applicant signs, immediate supervisor verifies, Head of Dept approves, HR reviews.** One chain, and **it does not differ by leave type** — the leave application form and the gate pass (§5) carry the same four signatures whatever the type or category. **Milestone 1 is HR typing a form that has already been signed on paper.** Recording who signed, and routing an approval to a person, are both Milestone 5.
+
+### Other rules
+
 - **Half-day leave exists** and is stored as a fraction.
 - **Leave naming is not a free choice** — every type must map onto SQL Account's Pay Days and No Pay Days codes.
 - A leave record carries its SQL Account code from the start, left empty until the mapping is answered.
-- **The date of application is recorded, separately from the leave dates.** From the leave card, which has a column for it: when leave was asked for and when it was taken are different facts and the card keeps both.
-- **The number of days is recorded as given, not computed from the range.** The card states it per line. A half day, and a non-working day inside a range, both mean the count and the span are not the same number — deriving one from the other would overwrite what HR wrote.
-- **Entitlement rules, balances and approval are not designed.** Milestone 1 is entry only: employee, date or range, code. The leave card's balance, entitlement, comments and remarks are marked for office use and stay out with them.
+- **The date of application is recorded, separately from the leave dates.** Both the leave card and the application form carry it: when leave was asked for and when it was taken are different facts, and the paper keeps both.
+- **The number of days is recorded as given, not computed from the range.** The card states it per line and the form has a field for it. A half day, and a non-working day inside a range, both mean the count and the span are not the same number — deriving one from the other would overwrite what HR wrote.
+- **Entitlement rules and balances are not designed, and neither is the approval workflow.** The chain is known (above); nothing routes it yet. Milestone 1 is entry only: employee, applied-for type, sheet code, date or range, number of days, date of application. The leave card's balance, entitlement, comments and remarks are marked for office use and stay out with them.
 
 ---
 
@@ -207,7 +248,7 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A11|Late deduction threshold ≥30 min, inclusive|
 |A12|Threshold applies to the combined 16→15 total|
 |A13|Time off threshold ≥30 min, gate pass and slips combined|
-|A14|Leave codes AL, MC, EL, UL, PH, AB, SS|
+|A14|Leave codes AL, MC, EL, UL, PH, AB, SS — the sheet legend, now known to be an incomplete list: four form types have no code at all (§6)|
 |A15|Half day stored as 0.5|
 |A19|Device PIN equals the employee number|
 |A21|The device pushes the PIN with leading zeros intact|

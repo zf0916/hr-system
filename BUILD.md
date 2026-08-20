@@ -112,6 +112,8 @@ Verified on the compose stack: a full cycle clean, a second cycle clean against 
 
 Artifacts received and analysed: daily attendance sheet, late coming summary and deduction record, individual time-off record, time-off salary summary, SQL Account payroll entry screen, **leave card** — HR's per-employee leave ledger, kept by hand and not in the repo, since it carries a real employee's name and join date. What it settled is in SPEC §6 and §2.
 
+**Leave application form** — the two leave vocabularies and the approval chain, SPEC §6. **Gate pass** — category, destination, out and in times, four signatures, and who fills the times, SPEC §5. Both were photographed blank, with no employee data on them, and **the photographs are not in the repo**: they are not source, and what they settled is in SPEC.
+
 **Nothing in the protocol contract has been verified against the device** — see SPEC.md §12. The simulator therefore tests that the receiver behaves as the contract says, not that the contract is right. Only real traffic settles that.
 
 ---
@@ -220,7 +222,7 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |Confirm the site timezone (SPEC §9 A32), and that a PIN is never reassigned to another employee while old punches still matter (A33)|Zi Fong / HR|Corrections, daily attendance|
 |Does the sheet need to stay Excel, or is a screen acceptable?|HR|Milestone 1 output|
 |**Can SQL Account import a file, or is it keyed by hand?** Sample export if yes|Accounts|Milestone 2 deliverable|
-|What do `DW` `MT` `MR` `CL` `HL` `EX` `PT` `AD` `LS` `OOB` mean, and which are actually used?|Accounts|Milestone 2|
+|What do `DW` `MT` `MR` `CL` `HL` `EX` `PT` `AD` `LS` `OOB` mean, and which are actually used? **`CL`, `HL` and `MT` have candidates by content from the leave application form — Compassionate, Hospitalization, Maternity (SPEC §6). Candidates for Accounts to confirm, not decided**|Accounts|Milestone 2|
 |Is `Lateness` the raw total or only the deductible portion?|Accounts|Milestone 2|
 |Is `Work Hours` gross or net of break — and which break?|Accounts|Milestone 2|
 |**Where does overtime come from?** A form, an approval, who calculates it|Accounts|Milestone 2|
@@ -229,7 +231,6 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |How many enroll, and when can they be scheduled including night shift?|HR|Enrollment|
 |Which employees have worn fingerprints?|HR|Enrollment|
 |Which notification channel do supervisors actually use?|Supervisors|Milestone 5|
-|Who approves leave, and does the chain differ by type?|HR|Milestone 5|
 |Can floor workers use a web form, in which languages, and is a kiosk needed?|HR|Milestone 5|
 |**Privacy handling for passport, IC and medical data** — encryption, retention, access logging|Management|Milestone 4|
 |**ADMS protocol spec**|ZKTeco supplier|Confirms §12|
@@ -238,9 +239,9 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 
 **Artifacts still wanted**
 
-Leave application form · gate pass form · medical treatment slip · **one closed month of attendance sheet with the matching SQL Account entries** — that last one lets the whole chain be reconciled end to end before anything is built.
+Medical treatment slip · **one closed month of attendance sheet with the matching SQL Account entries** — that second one lets the whole chain be reconciled end to end before anything is built.
 
-**The leave card is not the leave application form**, and receiving it ticks none of these off. All three forms are still outstanding.
+**The gate pass does not tick off the treatment slip.** Its Medical Treatment tick is the exit authorisation and not the treatment record (SPEC §5), and the slips are counted separately — up to five per employee per month on the summary. The slip is the last form outstanding.
 
 The punch card itself is not needed. Its only unique content is the leave codes HR writes on it, and those already appear on the sheet.
 
@@ -251,6 +252,9 @@ The punch card itself is not needed. Its only unique content is the leave codes 
 |Item|Note|
 |---|---|
 |Leave entitlements and balances|Milestone 5|
+|Leave applied 7 days in advance, except compassionate, and approved before it is taken|Milestone 5|
+|Sick leave attaches a sick certificate|Milestone 5|
+|Unpaid leave attaches supporting documents|Milestone 5|
 |Approval workflow|**Approval links must be single-use, expiring and bound to one supervisor** — a messaging link can be forwarded, and the endpoint is public. **HR-entered applications never re-trigger approval**; the paper form was already signed, and asking a supervisor twice makes them stop responding|
 |Notification channel|Telegram's bot API is free and quick. WhatsApp Business API costs per message and needs verification through Meta. WhatsApp is the common channel locally. **Settle with the supervisors before building**|
 |Overtime input path|Source unknown. May be needed for Milestone 2|
