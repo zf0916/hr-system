@@ -22,6 +22,7 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy import select
 
 from app.db import Session
+from app.commands import hand_out, next_for, record_results
 from app.models import Device, DeviceOption, RawRequest
 from app.parser import parse_raw_request
 
@@ -97,10 +98,23 @@ def response_for(request: Request, session, body: bytes, serial: str | None,
     if path.endswith("/iclock/cdata") and (table or "").strip().lower() == "attlog":
         return f"OK: {count_lines(body)}"
 
-    # OPERLOG, ATTPHOTO, fdata, devicecmd, getrequest with no pending command,
-    # and every route the firmware has that we have not seen: plain OK.
-    # getrequest may also answer C:{id}:{CMD} — the command queue is step 8 and
-    # does not exist yet, so there is never a pending command to send.
+    if path.endswith("/iclock/getrequest") and serial:
+        # At most one command per poll, oldest first, for this serial only.
+        # One at a time is the conservative reading of a format nobody has
+        # tested (SPEC §9 A46): a device that only acts on the first line loses
+        # nothing, because the rest are still queued for the next poll, which
+        # is seconds away.
+        #
+        # The hand-out is marked in this same transaction as the raw request
+        # that asked for it, so a command cannot leave without the request that
+        # took it being on the record.
+        command = next_for(session, serial)
+        if command is not None:
+            return hand_out(session, command)
+
+    # OPERLOG, ATTPHOTO, fdata, devicecmd, getrequest with nothing queued, and
+    # every route the firmware has that we have not seen: plain OK. A device
+    # with no command waiting gets exactly what it got before this step.
     return OK
 
 
@@ -164,6 +178,23 @@ async def handle(request: Request) -> PlainTextResponse:
             # committed, so a replay fixes this without the device involved.
             log.exception("parse failed for raw_request %s", raw_id)
 
+    if raw_id is not None and request.url.path.rstrip("/").endswith(
+            "/iclock/devicecmd"):
+        # Reading the result happens after the answer, for the same reason
+        # parsing does: the response is already `OK`, and a result this code
+        # cannot make sense of must not become an error the device sees
+        # (SPEC §12).
+        try:
+            with Session() as session:
+                stored = session.get(RawRequest, raw_id)
+                written = record_results(session, stored)
+                session.commit()
+                log.info("raw_request %s carried %s command result(s)",
+                         raw_id, len(written))
+        except Exception:
+            log.exception("could not record command results for raw_request %s",
+                          raw_id)
+
     return _ok(text)
 
 
@@ -173,10 +204,10 @@ async def handle(request: Request) -> PlainTextResponse:
 # POST /iclock/cdata?SN=&table=ATTPHOTO                  -> OK
 router.add_api_route("/iclock/cdata", handle, methods=ALL_METHODS)
 
-# GET /iclock/getrequest?SN=  -> OK, or C:{id}:{CMD}
+# GET /iclock/getrequest?SN=  -> OK, or C:{id}:{CMD} when one is queued (step 8)
 router.add_api_route("/iclock/getrequest", handle, methods=ALL_METHODS)
 
-# POST /iclock/devicecmd?SN=  -> OK
+# POST /iclock/devicecmd?SN=  -> OK, and the result is recorded downstream
 router.add_api_route("/iclock/devicecmd", handle, methods=ALL_METHODS)
 
 # POST /iclock/fdata  -> OK

@@ -966,3 +966,99 @@ class IngestionAlert(Base):
 
 Index("ix_ingestion_alert_serial_kind", IngestionAlert.serial_number,
       IngestionAlert.kind, IngestionAlert.id)
+
+
+# ---------------------------------------------------------------------------
+# Step 8: the device command queue.
+#
+# The device asks for work on every poll and reports each result back (SPEC
+# §11). Two things about this step are deliberately small:
+#
+#   * **Two commands exist: REBOOT and CHECK.** Nothing that clears, deletes or
+#     resets anything on the device. The device buffers punches while the
+#     receiver is unreachable and that has never been proven on this hardware
+#     (BUILD.md) — an unbuffered clear would take punches with it, and there is
+#     no way to get them back.
+#   * **The formats are documented, not observed** (SPEC §9 A46, A47). No
+#     command has ever been sent to this device.
+# ---------------------------------------------------------------------------
+
+
+class DeviceCommandType(Base):
+    """The commands this system is willing to send.
+
+    Rows, because §11 says the command strings themselves are unverified — and
+    a row is also where the refusal to add a destructive one is visible. There
+    is no `CLEAR DATA` row and adding one is a decision, not a typo.
+    """
+
+    __tablename__ = "device_command_type"
+
+    code = mapped_column(Text, primary_key=True)
+    command_text = mapped_column(Text, nullable=False)
+    label = mapped_column(Text, nullable=False)
+    note = mapped_column(Text)
+
+
+class DeviceCommand(Base):
+    """One row per command issued, and one per result that matched nothing.
+
+    The lifecycle is three stamps: queued, handed out, result received. A row
+    that has been handed out and never answered is the interesting one — it
+    means the device took the command and either did not finish it or does not
+    report the way the documentation says.
+
+    `reported_id` is the id **as the device sent it back**, stored verbatim
+    beside our own. They are expected to be the same string and nothing depends
+    on that being true: matching is done on the text the device returned, and a
+    mismatch shows up as a row rather than as a lost result.
+
+    An `unsolicited` row is a result for a command this system never issued. It
+    is stored, flagged, and changes no response — the same reflex as an unknown
+    serial (SPEC §12).
+    """
+
+    __tablename__ = "device_command"
+
+    id = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    serial_number = mapped_column(Text, nullable=False)
+    command_code = mapped_column(Text, ForeignKey("device_command_type.code"))
+    command_text = mapped_column(Text)
+
+    queued_at = mapped_column(SERVER_TS)
+    queued_by = mapped_column(Text)
+    handed_out_at = mapped_column(SERVER_TS)
+    handed_out_raw_request_id = mapped_column(BigInteger, ForeignKey("raw_request.id"))
+
+    result_at = mapped_column(SERVER_TS)
+    result_raw_request_id = mapped_column(BigInteger, ForeignKey("raw_request.id"))
+    reported_id = mapped_column(Text)
+    return_code = mapped_column(Text)
+    result_body = mapped_column(Text)
+
+    unsolicited = mapped_column(Boolean, nullable=False, default=False)
+    note = mapped_column(Text)
+
+    __table_args__ = (
+        # A queued command names what it is; an unsolicited result does not
+        # have to, because the device chose what to tell us.
+        CheckConstraint(
+            "unsolicited OR (command_code IS NOT NULL AND queued_at IS NOT NULL)",
+            name="device_command_queued_rows_have_a_command",
+        ),
+        CheckConstraint(
+            "NOT unsolicited OR result_at IS NOT NULL",
+            name="device_command_unsolicited_rows_are_results",
+        ),
+        # Handed out before answered, and never answered without being handed
+        # out — unless nobody issued it.
+        CheckConstraint(
+            "result_at IS NULL OR handed_out_at IS NOT NULL OR unsolicited",
+            name="device_command_answered_only_after_handout",
+        ),
+    )
+
+
+Index("ix_device_command_serial", DeviceCommand.serial_number, DeviceCommand.id)
+Index("ix_device_command_pending", DeviceCommand.serial_number,
+      DeviceCommand.handed_out_at)

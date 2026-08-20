@@ -30,12 +30,17 @@ from __future__ import annotations
 import argparse
 import http.client
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from urllib.parse import urlencode
 
 SN = "SIM0000000001"
 UNKNOWN_SN = "NOTALLOWLISTED9"
+
+# SPEC §9 A46. What we believe a queued command looks like on the wire. The
+# device has never been sent one, so this pattern is the assumption under test.
+COMMAND_LINE = re.compile(r"^C:(\d+):(.+)$")
 
 # The ten options the real device was sent and accepted (raw_request 101).
 ACCEPTED_OPTIONS = {
@@ -114,6 +119,11 @@ class Sim:
     # ATTLOG bodies this run sent on purpose in a broken state. Everything else
     # it sends is meant to parse.
     deliberately_malformed: list = field(default_factory=list)
+    # Command ids queued for this run before the cycle starts, and the ones the
+    # device answered.
+    queued: list = field(default_factory=list)
+    collected: list = field(default_factory=list)
+    answered: list = field(default_factory=list)
 
     # ---- transport ---------------------------------------------------------
 
@@ -184,6 +194,54 @@ class Sim:
         )
 
 
+def collect_command(sim: Sim, response: Response) -> bool:
+    """If this poll came back with a command, act on it and report the result.
+
+    **Every** poll goes through here, not just the ones in the command section:
+    a device asks for work on every request it makes, so a simulator that only
+    listens for commands in one place would take one, never answer it, and
+    leave a queue that looks answered from the outside.
+    """
+    body = response.text.strip()
+    match = COMMAND_LINE.match(body)
+    if match is None:
+        return False
+    command_id, command_text = match.group(1), match.group(2)
+    sim.check(command_text in ("REBOOT", "CHECK"),
+              f"the command is one this system sends: {command_text}",
+              f"got {command_text!r}")
+    sim.collected.append(command_id)
+
+    # The device acts, then reports. Return=0 is success, in the document that
+    # has never been checked against this firmware (SPEC §9 A47).
+    r = sim.send("POST", "/iclock/devicecmd", {"SN": SN},
+                 f"ID={command_id}&Return=0&CMD={command_text}\r\n".encode())
+    sim.firmware_accepts("devicecmd", r)
+    sim.expect_body("devicecmd", r, "OK")
+    sim.answered.append(command_id)
+    return True
+
+
+def queue_commands(sim: Sim) -> None:
+    """Put a command of each kind on this device's queue, straight into the
+    database — that is what `hr cmd send` does, and the simulator is standing
+    in for a person typing it."""
+    import psycopg
+
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        for code in ("REBOOT", "CHECK"):
+            cur.execute(
+                "INSERT INTO device_command (serial_number, command_code, "
+                "command_text, queued_at, queued_by, unsolicited) "
+                "VALUES (%s, %s, (SELECT command_text FROM device_command_type "
+                "WHERE code = %s), now(), 'simulator', false) RETURNING id",
+                (SN, code, code),
+            )
+            sim.queued.append(str(cur.fetchone()[0]))
+        conn.commit()
+    print(f"queued commands {sim.queued} for {SN}")
+
+
 def run_cycle(sim: Sim) -> None:
     """One full cycle, in the order a device does it after power-on."""
 
@@ -215,6 +273,9 @@ def run_cycle(sim: Sim) -> None:
     body = r.text.strip()
     sim.check(body == "OK" or body.startswith("C:"), "getrequest: OK or C:{id}:{CMD}",
               f"got {body!r}")
+    # This poll can carry a command like any other, and if it does it is
+    # answered here rather than left hanging.
+    collect_command(sim, r)
 
     print("\n-- punch batch (POST /iclock/cdata table=ATTLOG)")
     r = sim.send("POST", "/iclock/cdata",
@@ -253,11 +314,34 @@ def run_cycle(sim: Sim) -> None:
     sim.firmware_accepts("fdata", r)
     sim.expect_body("fdata", r, "OK")
 
-    print("\n-- command result (POST /iclock/devicecmd)")
+    print("\n-- the command queue: poll, act, report (SPEC §11, step 8)")
+    # Whatever this run queued is collected one per poll, acted on, and
+    # answered. The formats are documented rather than observed (SPEC §9 A46,
+    # A47), so this exercises what we believe and will be corrected by the
+    # first real REBOOT.
+    for _ in range(len(sim.queued) + 1):
+        r = sim.send("GET", "/iclock/getrequest", {"SN": SN}, content_type=None)
+        sim.firmware_accepts("getrequest (command poll)", r)
+        if not collect_command(sim, r):
+            sim.check(r.text.strip() == "OK",
+                      "a poll with nothing queued answers exactly OK, as before",
+                      f"got {r.text.strip()!r}")
+            break
+
+    sim.check(len(sim.collected) == len(sim.queued),
+              f"every queued command was handed out ({len(sim.queued)})",
+              f"queued {sim.queued}, collected {sim.collected}")
+    sim.check(sorted(sim.collected) == sorted(sim.queued),
+              "and each one exactly once",
+              f"collected {sim.collected}")
+    sim.check(sim.collected == sorted(sim.collected, key=int),
+              "oldest first", f"collected {sim.collected}")
+
+    print("\n-- a result for a command nobody issued")
     r = sim.send("POST", "/iclock/devicecmd", {"SN": SN},
-                 b"ID=1&Return=0&CMD=DATA UPDATE USERINFO\r\n")
-    sim.firmware_accepts("devicecmd", r)
-    sim.expect_body("devicecmd", r, "OK")
+                 b"ID=999999999&Return=0&CMD=DATA UPDATE USERINFO\r\n")
+    sim.firmware_accepts("devicecmd (unsolicited)", r)
+    sim.expect_body("devicecmd (unsolicited)", r, "OK")
 
     print("\n-- malformed input (every one still has to be answered)")
     malformed = [
@@ -500,6 +584,50 @@ def check_db(sim: Sim, baseline: int) -> None:
             "the parser does not accept (SPEC §12)",
         )
 
+        # **Every command this run issued has to end with a result recorded
+        # against it.** A queue that hands work out and never hears back looks
+        # exactly like a queue that works, from the outside — the same shape of
+        # hole as a punch line nobody parses.
+        if sim.queued:
+            cur.execute(
+                "SELECT count(*) FROM device_command WHERE id = ANY(%s) "
+                "AND handed_out_at IS NOT NULL AND result_at IS NOT NULL "
+                "AND return_code IS NOT NULL",
+                ([int(i) for i in sim.queued],),
+            )
+            answered = cur.fetchone()[0]
+            sim.check(answered == len(sim.queued),
+                      f"every command issued came back with a result "
+                      f"({answered}/{len(sim.queued)})",
+                      f"{len(sim.queued) - answered} were handed out and never "
+                      "answered, or never handed out at all")
+
+            cur.execute(
+                "SELECT count(*) FROM device_command WHERE id = ANY(%s) "
+                "AND reported_id IS DISTINCT FROM id::text",
+                ([int(i) for i in sim.queued],),
+            )
+            sim.check(cur.fetchone()[0] == 0,
+                      "and each result came back under the id it was sent with")
+
+        cur.execute(
+            f"SELECT count(*) FROM device_command WHERE unsolicited "
+            "AND result_raw_request_id > %s", (baseline,))
+        stray = cur.fetchone()[0]
+        sim.check(stray == 1,
+                  "a result for a command nobody issued is stored and flagged",
+                  f"found {stray}")
+
+        cur.execute(
+            "SELECT count(*) FROM device_command WHERE command_text ILIKE '%%CLEAR%%' "
+            "OR command_text ILIKE '%%DELETE%%' OR command_code IN "
+            "(SELECT code FROM device_command_type WHERE command_text ILIKE '%%CLEAR%%')"
+        )
+        destructive = cur.fetchone()[0]
+        sim.check(destructive == 0,
+                  "nothing that clears or deletes has ever been queued "
+                  "(SPEC §13)", f"found {destructive}")
+
         # A body the parser choked on is answered OK and stored, which is the
         # rule — and is also invisible from outside. This is where it shows.
         cur.execute(
@@ -564,6 +692,15 @@ def main() -> int:
         except Exception as exc:
             print(f"cannot read the database to check what lands: {exc}\n"
                   "Set DATABASE_URL, or pass --protocol-only to check responses only.",
+                  file=sys.stderr)
+            return 2
+    if not args.protocol_only:
+        # The queue is part of the cycle now: a device asks for work on every
+        # poll, so a run with nothing queued would never exercise it.
+        try:
+            queue_commands(sim)
+        except Exception as exc:
+            print(f"cannot queue commands to exercise the queue: {exc}",
                   file=sys.stderr)
             return 2
     try:

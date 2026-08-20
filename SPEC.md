@@ -316,10 +316,14 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A43|**15 minutes of total silence from a device is a fault.** The device polls every 10 seconds, so that is about 90 missed polls|
 |A44|**A punch is due once a shift has been running 60 minutes**, and no punch for 180 minutes while one is running on an open day is a fault. **Closed days are not checked for punch silence at all**|
 |A45|**A serial on the allowlist that has never been heard from is not an outage.** It starts being watched at its first request|
+|A46|**A queued command is handed to the device as `C:{id}:{CMD}`, one per poll**, and the device acts on it. From the protocol document; no command has ever been sent to this device|
+|A47|**The device reports the result as `ID={id}&Return={code}&CMD={command}`**, with `Return=0` meaning success, posted to `/iclock/devicecmd`. Same document, same lack of evidence|
 
 **Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 is isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
 
 **A21 — "the device pushes the PIN with leading zeros intact" — is answered and gone.** The question never arises: the device refuses to accept a leading zero in a user ID at all (§10). The mapping absorbed it with no code change, which is what §13's rule against resolving a PIN at capture was for.
+
+A46 and A47 are the command queue's, and they are the only two assumptions in this system that **nothing has ever tested against the hardware** — not even once, the way A26 was tested by a handshake and A27 was not. The simulator exercises what the document says, which proves the receiver consistent with the document and says nothing about the firmware. **The factory test is one `REBOOT`**, and what it settles is listed in BUILD.md.
 
 A43 to A45 are the alert's, and the risk in them is the same in both directions: too tight and HR learns to ignore it, too loose and a day of capture is lost before anybody looks. **A43 is the cheap one to get right** — the device polls every ten seconds, so any threshold above a few minutes is safe and 15 was chosen to survive a reboot without crying wolf. **A44 is the one carrying a real judgement**: 60 minutes before a punch is due, because a shift can legitimately start slowly, and 180 minutes of nothing while a shift runs, because that is long enough to be a fault and short enough to fix the same day. **A45 exists because the alternative alarms forever**: a serial added before the device is installed would raise an outage every check until it is mounted.
 
@@ -407,6 +411,12 @@ Used for: creating and updating user records, setting and clearing a fallback pa
 
 **Password payloads are plaintext over an unauthenticated endpoint.** Purged on completion, never logged. A further reason the receiver stays on the LAN.
 
+**The queue is built, and it carries two commands: `REBOOT` and `CHECK`.** Neither touches a record on the device. **There is deliberately nothing that clears, deletes or resets anything**, and the reason is in BUILD.md: the device is believed to buffer punches while the receiver is unreachable, and nothing has ever proven it on this hardware. An unbuffered clear would take punches with it and there would be no way to get them back. Adding such a command is a row somebody adds in front of evidence, not a line of code (§13).
+
+**One command per poll, oldest first, for that serial only.** A device with nothing queued gets exactly the reply it got before the queue existed. The hand-out is marked in the same transaction as the request that collected it, so a command cannot leave without the request that took it being on the record.
+
+**A result for a command this system never issued is stored, flagged and answered `OK`** — the same reflex as an unknown serial. The device is reporting something that happened, and refusing to write it down would not make it un-happen.
+
 Command strings are unverified and get pinned during the first real device capture. The queue itself does not depend on them.
 
 ---
@@ -422,10 +432,10 @@ The device is the HTTP client. It pushes; we never poll. All routes under `/iclo
 |`GET /iclock/cdata?SN=&options=all&pushver=&language=`|`GET OPTION FROM: {SN}` then `Key=Value` lines|Observed. The query also carries `DeviceType=att` and `PushOptionsFlag=1`|
 |`POST /iclock/cdata?SN=&table=ATTLOG&Stamp=`|`OK: {n}`|Observed. `Stamp=`, as written — **and its value is the one we handed the device in the handshake reply**|
 |`POST /iclock/cdata?SN=&table=OPERLOG&OpStamp=`|`OK`|Observed. **`OpStamp=`, not `Stamp=`** — the two tables name their cursor differently|
-|`GET /iclock/getrequest?SN=`|`OK`, or `C:{id}:{CMD}`|Observed. **The first poll after a handshake also carries `INFO=`** — firmware version, the device's IP, and counts, comma-separated|
+|`GET /iclock/getrequest?SN=`|`OK`, or `C:{id}:{CMD}`|The `OK` is observed, and **the command line is not** (§9 A46). The first poll after a handshake also carries `INFO=` — firmware version, the device's IP, and counts, comma-separated|
 |`POST /iclock/cdata?SN=&table=options`|`OK`|Observed, and **not in any material in hand**: the device POSTs its whole option set to us|
 |`POST /iclock/cdata?SN=&table=BIODATA`|`OK`|Observed, and also undocumented here: biometric templates, base64|
-|`POST /iclock/devicecmd?SN=`|`OK`|Not seen — nothing was queued|
+|`POST /iclock/devicecmd?SN=`|`OK`|**Not seen.** The result format is documented only (§9 A47)|
 |`POST /iclock/cdata?SN=&table=ATTPHOTO`, `POST /iclock/fdata`|`OK`|Not seen|
 |catch-all `/iclock/{rest:path}`|`OK`|**This is what absorbed `options` and `BIODATA`** — see below|
 
@@ -460,6 +470,13 @@ The device is the HTTP client. It pushes; we never poll. All routes under `/iclo
 **The verify field shows the method. Confirmed physically: `15` face, `1` fingerprint** — both tested at the device. This is the field the password-punch count reads (§10).
 
 **Device time carries no offset, and the offset is `+8`, observed.** The device sent `2026-08-20 11:27:27` with no marker of any kind; the server stamped the arrival at `03:27:27+00:00`. Exactly eight hours, consistent with the `TimeZone=8` the receiver sent it. **This is the case that "stored as sent, never converted on the way in" (§14) exists for**: the string is kept, the arrival instant is kept beside it, and the difference is a fact anybody can re-derive rather than a conversion nobody can undo. It is also how clock drift will show (§10). See §9 A32.
+
+**The command formats are documented, not observed.** No command has ever been sent to this device, so both halves of the exchange below are assumptions (§9 A46, A47) and are marked as such in the route table:
+
+    reply to a poll     C:{id}:{CMD}          e.g. C:12:REBOOT
+    result posted back  ID=12&Return=0&CMD=REBOOT
+
+**The id in the reply is ours; the id in the result is stored as the device sent it**, beside ours, and matching is done on the returned text. If this firmware renumbers, truncates or omits it, that shows up as a row with a mismatched `reported_id` rather than as a result nobody can place. **The first real `REBOOT` corrects both formats the way the first real punch corrected the punch line.**
 
 **Status was `255` on every punch, and that is settled rather than unverified.** The device is not labelling in versus out. Punch state options are off by default on this model and are staying off, so **first in and last out come from the times alone** — which is what §3 already does. Nothing downstream reads status.
 
@@ -518,6 +535,7 @@ What is still not settled:
 |Discarding a calendar adjustment when the year is re-uploaded|It is a deliberate decision, kept as its own row and reported|
 |Padding or stripping the employee number on write|Stored verbatim; a separate key does the matching|
 |A partial user update to the device|It wipes the whole record|
+|Queueing a device command that clears, deletes or resets records|Buffering is unproven; an unbuffered clear loses punches with no way back|
 |Building overtime|Its source is unknown|
 |Designing leave entitlements, the export format, the government-application field set, or reports|Blocked on HR. Stop and say so|
 |Storing passport, IC or medical certificate data|Privacy handling undecided|

@@ -41,7 +41,7 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 |**5**|**HR entry** — leave, gate pass, treatment slip, from the paper forms HR already receives|Codes appear on the generated sheet|
 |**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it — **built; the rows exist and a total is a query away**|
 |**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7) — **built; leave codes wait on step 5**|
-|**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device|
+|**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device — **the queue is built and carries REBOOT and CHECK; user push waits on the formats being real**|
 |**9**|**Ingestion alert** — warns when punches stop arriving|Silence for N hours raises a warning — **built; contact silence and punch silence are separate, both rows**|
 
 **Then: demo to HR, walking the assumed values line by line while the software is on screen.**
@@ -65,6 +65,14 @@ Deliberately not in step 2: no employee screen, no push to the device, no leave,
 **Every schedule and every holiday now in the database is marked provisional.** The 2026 list is still parked. `fixtures/holidays_provisional_2026.xlsx` carries only holidays whose dates are fixed by the calendar — Hari Raya, Chinese New Year, Deepavali, Wesak and Thaipusam are deliberately absent, because a plausible wrong date is worse than a missing one.
 
 Deliberately not in step 3: no late minutes, no daily attendance, no sheet.
+
+**Step 8 is built, as far as it can be without the device.** `hr cmd send <serial> REBOOT|CHECK` queues one command; the device collects it on its next poll and reports the result back. `getrequest` hands out **one command per poll, oldest first, for that serial only**, and marks the hand-out in the same transaction as the request that took it — a command cannot leave without the request that collected it being on the record. **A device with nothing queued gets exactly the reply it got before this step**, byte for byte. `devicecmd` records the result against its command, and **a result for a command nobody issued is stored, flagged and still answered `OK`** — the same reflex as an unknown serial.
+
+**Two commands exist: REBOOT and CHECK.** They are rows, and there is deliberately no row that clears, deletes or resets anything. The device is believed to buffer punches across an outage and **that is still unproven on this hardware** — an unbuffered clear would take punches with it, so adding such a command is a decision made in front of evidence, not an edit. SPEC §13 now says so as a never.
+
+**Both wire formats are documented, not observed** — `C:{id}:{CMD}` going out and `ID=&Return=&CMD=` coming back (SPEC §9 A46, A47). No command has ever been sent to this device. The simulator exercises what the document says, which proves the receiver consistent with the document and nothing about the firmware.
+
+The simulator now queues a command of each kind, collects them, acts, and reports; it also posts a result for a command nobody issued. **Every poll it makes answers a command if one comes back**, because the first version only listened in one place, took a command there and never answered it — the queue looked answered from the outside while a command hung. The check that catches that: every command a run issues must end with a result recorded against it, under the id it was sent with. Broken on purpose: not marking the hand-out made one command go out four times and none come back; raising on an unsolicited result made the flagged row disappear — and **the device still saw `OK` in both cases**, which is §12's rule holding.
 
 **Step 9 is built.** `hr alert check` watches every serial on the allowlist and reports **two silences, never one**: contact silence, which means the device is off, the network is down or the Cloud Server setting moved, and punch silence, which only counts while a shift is running on a day the calendar says the factory is open. A single "time since the last punch" would alarm every weekend and stay quiet when the receiver is unplugged on a public holiday.
 
@@ -135,6 +143,10 @@ Run it:
     hr devices list
     hr alert check --verbose        # silent and 0 when well, loud and 2 when not
     hr alert history
+
+    hr cmd types
+    hr cmd send SIM0000000001 CHECK
+    hr cmd list SIM0000000001
     */5 * * * * docker compose exec -T api hr alert check   # the transport
 
     hr sheet render --month 2026-08
@@ -333,6 +345,8 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**How long into a running shift is no punch at all a fault** (SPEC §9 A44)? 60 minutes before a punch is due and 180 minutes of silence is the assumption. A slow start and a genuine fault look the same until HR says where the line is|HR|Nothing — it is a row|
 |**Who receives the alert, and how, once the site has a real monitoring path?** Today it is a scheduled job that exits non-zero and writes a status file. This is HR-facing infrastructure and is deliberately not the supervisors' notification channel|Zi Fong, then management|Nothing — the transport is one line of cron|
 |**Should a serial that pushes but is not on the allowlist raise an alarm, or stay a notice?** It is a notice today, because a stray probe should not page anybody — but it is also how a real device went unwatched for four hours|Zi Fong|Nothing structural|
+|**Does this firmware accept `C:{id}:{CMD}`, and does it act on it** (SPEC §9 A46)? One `REBOOT` settles it. Also unknown: whether more than one command may be sent per poll, and what the device does with an id it does not recognise|The device, then ZKTeco supplier|Step 8's format, not its shape|
+|**Does the device report a result as `ID=&Return=&CMD=`, and is `Return=0` success** (SPEC §9 A47)? The same `REBOOT` settles it. Also unknown: whether the id comes back as sent, what a failure code looks like, and whether a result arrives at all for a command that reboots the device before it can answer|The device, then ZKTeco supplier|Step 8's format, not its shape|
 |**What does a cell show when both the arrival and the departure are outside the schedule** (SPEC §9 A38)? The sheet writes both times, slash-separated. Early departure is named in §8 and defined nowhere|HR|The sheet's cells|
 |**Does any group rest on a day other than Sunday** (SPEC §9 A42)? If one does, a column stops shading wholly, and the sheet reports it rather than shading part of one|HR|Whole-column shading|
 |Confirm the site timezone (SPEC §9 A32), and that a PIN is never reassigned to another employee while old punches still matter (A33)|Zi Fong / HR|Corrections, daily attendance|

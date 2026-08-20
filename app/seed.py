@@ -12,6 +12,7 @@ from app.models import (
     AttendanceStatus,
     CorrectionReason,
     Device,
+    DeviceCommandType,
     DeviceOption,
     EmployeeNumberRule,
     HolidayScope,
@@ -217,6 +218,21 @@ ALERT_SETTINGS = [
 ]
 
 
+# SPEC §11. What this system is willing to send a device, and nothing else.
+#
+# **There is no command here that clears, deletes or resets anything.** The
+# device buffers punches while the receiver is unreachable, that has never been
+# proven on this hardware, and an unbuffered clear takes punches with it. Adding
+# such a row is a decision somebody makes deliberately, in front of evidence —
+# not a line of code somebody edits (SPEC §13).
+DEVICE_COMMAND_TYPES = [
+    ("REBOOT", "REBOOT", "Restart the device",
+     "the safest real command there is: it touches no records"),
+    ("CHECK", "CHECK", "Ask the device to re-read its own configuration",
+     "used to prove the queue works end to end without changing anything"),
+]
+
+
 def seed(session) -> None:
     for serial, label, note in DEVICES:
         session.add(Device(serial_number=serial, label=label, note=note))
@@ -246,4 +262,7 @@ def seed(session) -> None:
         session.add(SheetSetting(key=key, value=value, note=note))
     for key, value, note in ALERT_SETTINGS:
         session.add(AlertSetting(key=key, value=value, note=note))
+    for code, command_text, label, note in DEVICE_COMMAND_TYPES:
+        session.add(DeviceCommandType(code=code, command_text=command_text,
+                                      label=label, note=note))
     session.commit()
