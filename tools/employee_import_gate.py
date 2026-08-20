@@ -81,6 +81,7 @@ class Gate:
     def __init__(self) -> None:
         self.failures: list[str] = []
         self.checks = 0
+        self.last_staged: list = []
 
     def check(self, ok: bool, what: str, detail: str = "") -> None:
         self.checks += 1
@@ -110,11 +111,13 @@ class Gate:
                     replace="no-replace" not in flags and not preload,
                     allow_new=set(allow_new),
                     accept_odd_numbers="accept-odd-numbers" in flags,
+                    accept_leading_zero_pins="accept-leading-zero-pins" in flags,
                 )
             except MappingError as exc:
                 session.rollback()
                 return [str(exc)], {}
             written = dict(result.written)
+            self.last_staged = list(result.staged)
             messages = [f"{p.field}: {p.message}" for p in result.problems]
             session.rollback()
             return messages, written if not result.problems else {}
@@ -264,6 +267,47 @@ def main() -> int:
         )
         if written:
             print("           stored verbatim, matched on the padded key")
+
+    print("\n-- a device PIN the hardware cannot hold (SPEC §2, §10)")
+    with tempfile.TemporaryDirectory() as directory:
+        work = Path(directory)
+        gate.must_fail(
+            work, "a PIN with a leading zero is refused",
+            expected="leading zero",
+            edits=[(6, 11, "0142")],
+        )
+        written = gate.must_pass(
+            work, "and loads when it is asked for deliberately", 8,
+            edits=[(6, 11, "0142")],
+            flags=("accept-leading-zero-pins",),
+        )
+        if written:
+            staged = {row.employee_number: row for row in gate.last_staged}
+            gate.check(staged["0142"].device_pin == "0142",
+                       "stored exactly as the list gave it")
+            gate.check("no punch" in staged["0142"].pin_note,
+                       "and the row says no punch can ever carry it",
+                       f"note {staged['0142'].pin_note!r}")
+
+        # A single zero is a PIN the device can hold — 0 is not a leading zero.
+        gate.must_pass(work, "a PIN of '0' is not a leading-zero PIN", 8,
+                       edits=[(6, 11, "0")])
+
+    print("\n-- every employee's PIN outcome is reported, not just a count")
+    with tempfile.TemporaryDirectory() as directory:
+        work = Path(directory)
+        written = gate.must_pass(work, "the fixture loads", 8)
+        staged = {row.employee_number: row for row in gate.last_staged}
+        gate.check(len(staged) == 8, "eight employees staged",
+                   f"got {len(staged)}")
+        mapped = [n for n, r in staged.items() if r.device_pin]
+        blank = [n for n, r in staged.items() if not r.device_pin]
+        gate.check(len(mapped) == 6 and len(blank) == 2,
+                   f"six mapped, two without a PIN: {sorted(blank)}",
+                   f"mapped {sorted(mapped)}, blank {sorted(blank)}")
+        gate.check(all("empty" in staged[n].pin_note for n in blank),
+                   "and each says why, in words",
+                   f"{[staged[n].pin_note for n in blank]}")
 
     print(f"\n{gate.checks} checks")
     if gate.failures:

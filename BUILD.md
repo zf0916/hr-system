@@ -66,6 +66,10 @@ Deliberately not in step 2: no employee screen, no push to the device, no leave,
 
 Deliberately not in step 3: no late minutes, no daily attendance, no sheet.
 
+**Two fixtures, and a rule about PINs.** `fixtures/employees_sample.xlsx` is the shape of HR's list. `fixtures/employees_punch_demo.xlsx` is a demonstration list of 58 employees whose PINs match punches actually in the raw layer — `1` for the real device, `0090`/`0657`/`1627` and `0001`–`0050` for the simulator — so the sheet can be seen with data on it. Four of its employees have no Device ID at all, because an empty row is a real case.
+
+**A device PIN with a leading zero is refused on import** (SPEC §2). The device will not hold one (§10), so a mapping row carrying `0142` looks like a working link and silently is not — the employee's punches go unattributed with nothing on screen saying why. The sample fixture carried exactly that and now carries `142`. `--accept-leading-zero-pins` loads one deliberately, which is what the demonstration list needs, because the simulator sends shapes the hardware cannot. **The import report now names every employee's PIN outcome** — mapped, blank cell, or refused — since a count cannot tell a correctly skipped blank from a rejected value. The import gate proves both directions.
+
 **Step 8 is built, as far as it can be without the device.** `hr cmd send <serial> REBOOT|CHECK` queues one command; the device collects it on its next poll and reports the result back. `getrequest` hands out **one command per poll, oldest first, for that serial only**, and marks the hand-out in the same transaction as the request that took it — a command cannot leave without the request that collected it being on the record. **A device with nothing queued gets exactly the reply it got before this step**, byte for byte. `devicecmd` records the result against its command, and **a result for a command nobody issued is stored, flagged and still answered `OK`** — the same reflex as an unknown serial.
 
 **Two commands exist: REBOOT and CHECK.** They are rows, and there is deliberately no row that clears, deletes or resets anything. The device is believed to buffer punches across an outage and **that is still unproven on this hardware** — an unbuffered clear would take punches with it, so adding such a command is a decision made in front of evidence, not an edit. SPEC §13 now says so as a never.
@@ -123,6 +127,11 @@ Run it:
 
     docker compose exec api hr employees import /srv/fixtures/employees_sample.xlsx \
         --mapping /srv/fixtures/employees_sample.mapping.toml --allow-new group
+
+    # the list whose PINs match the captured punches, so the sheet has data on it
+    docker compose exec api hr employees import /srv/fixtures/employees_punch_demo.xlsx \
+        --mapping /srv/fixtures/employees_punch_demo.mapping.toml \
+        --replace --allow-new group --accept-leading-zero-pins
     uv run python tools/employee_import_gate.py  # must exit 0
 
     docker compose exec api hr schedule seed-provisional

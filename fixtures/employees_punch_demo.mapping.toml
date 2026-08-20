@@ -1,0 +1,36 @@
+# The mapping for fixtures/employees_punch_demo.xlsx.
+#
+# Same shape as employees_sample.mapping.toml, because the demonstration list is
+# built to look like HR's: a title above the header, a header row the importer
+# never matches on, and a TOTAL footer under the data that last_data_row keeps
+# out of the import.
+#
+# What is different is the PINs. They are chosen to match punches that are
+# actually in the raw layer, so the sheet can be seen with data on it:
+#
+#     1            the real device, PIN 1, 2026-08-20
+#     0090, 0657   the simulator's named batch, 2026-08-18
+#     1627
+#     0001-0050    the simulator's shift-worth batch, 2026-08-18
+#
+# Most of those start with a zero, which the device refuses in a user ID
+# (SPEC §2, §10). They exist because the simulator sends shapes the hardware
+# cannot. Importing this list therefore needs --accept-leading-zero-pins, and
+# the report names every one of them.
+
+sheet = "Staff List"
+header_row = 4
+first_data_row = 5
+last_data_row = 62        # 63 is the TOTAL footer
+
+date_format = "%d/%m/%Y"
+
+[columns]
+employee_number = "B"
+name            = "D"
+section         = "E"
+role            = "F"
+group           = "G"
+active_from     = "I"
+left_on         = "J"
+device_pin      = "K"

@@ -170,6 +170,7 @@ def cmd_employees_import(args) -> int:
                 replace=args.replace,
                 allow_new=set(args.allow_new or ()),
                 accept_odd_numbers=args.accept_odd_numbers,
+                accept_leading_zero_pins=args.accept_leading_zero_pins,
             )
         except MappingError as exc:
             print(f"the mapping is wrong, so nothing was read:\n  {exc}",
@@ -199,6 +200,19 @@ def cmd_employees_import(args) -> int:
         print(f"  {table:22} {count}")
     if result.blank_rows:
         print(f"  {len(result.blank_rows)} blank rows skipped")
+    with_pin = [s for s in result.staged if s.device_pin]
+    without_pin = [s for s in result.staged if not s.device_pin]
+    print("  device PINs, one line per employee — a count cannot tell a blank "
+          "cell from a rejected value:")
+    for staged in with_pin:
+        suffix = f"   ({staged.pin_note})" if staged.pin_note else ""
+        print(f"    {staged.employee_number} -> pin {staged.device_pin!r}{suffix}")
+    for staged in without_pin:
+        print(f"    {staged.employee_number} -> no PIN: {staged.pin_note}")
+    print(f"    {len(with_pin)} mapped, {len(without_pin)} without a PIN. "
+          "An employee with no PIN has no punches attributed to them until one "
+          "is added (`hr employees map-pin`)")
+
     numeric = [s for s in result.staged if s.number_from_numeric_cell]
     if numeric:
         print(
@@ -375,6 +389,13 @@ def main() -> int:
         help="allow this list to introduce new sections, roles or groups — name "
              "the kind, one --allow-new each. Anything not named is an error, "
              "which is what catches a column pointing at the wrong place",
+    )
+    p_import.add_argument(
+        "--accept-leading-zero-pins",
+        action="store_true",
+        help="load a device PIN that starts with a zero. The device refuses "
+             "one (SPEC §10), so such a PIN can never appear on a punch and "
+             "the mapping will never match — say so deliberately",
     )
     p_import.add_argument(
         "--accept-odd-numbers",

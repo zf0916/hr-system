@@ -34,8 +34,11 @@ HEADERS = [
 ROWS = [
     ("0090", "", "Lim Wei Sheng", "PACK ASSY", "Production Assistant",
      "DAY-PROD", "12/03/2018", "", "90"),
+    # PIN 142, not 0142: the device refuses a leading zero in a user ID
+    # (SPEC §2, §10), and a fixture carrying one would ship a mapping row that
+    # can never match a punch. The refusal itself is proven in the gate.
     ("0142", "", "Nurul Aisyah binti Rahman", "QC", "QA/QC",
-     "DAY-PROD", "05/07/2019", "", "0142"),
+     "DAY-PROD", "05/07/2019", "", "142"),
     ("0657", "", "Tan Chee Keong", "MAINT", "Charge Hand",
      "DAY-PROD", "21/11/2015", "", "657"),
     ("0881", "resigned", "Ravi a/l Subramaniam", "WAREHOUSE", "Production Assistant",

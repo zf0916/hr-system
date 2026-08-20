@@ -328,14 +328,20 @@ def run_cycle(sim: Sim) -> None:
                       f"got {r.text.strip()!r}")
             break
 
-    sim.check(len(sim.collected) == len(sim.queued),
-              f"every queued command was handed out ({len(sim.queued)})",
-              f"queued {sim.queued}, collected {sim.collected}")
-    sim.check(sorted(sim.collected) == sorted(sim.queued),
-              "and each one exactly once",
-              f"collected {sim.collected}")
+    # A command somebody queued with `hr cmd send` before this run is a real
+    # case, and it is collected here like any other — so this asserts that
+    # everything this run queued came out, not that nothing else did.
+    missing = [i for i in sim.queued if i not in sim.collected]
+    sim.check(not missing,
+              f"every command this run queued was handed out ({len(sim.queued)})",
+              f"never handed out: {missing}; collected {sim.collected}")
+    sim.check(len(set(sim.collected)) == len(sim.collected),
+              "and none of them twice", f"collected {sim.collected}")
     sim.check(sim.collected == sorted(sim.collected, key=int),
               "oldest first", f"collected {sim.collected}")
+    if len(sim.collected) > len(sim.queued):
+        print(f"       (also collected {len(sim.collected) - len(sim.queued)} "
+              "command(s) queued before this run — that is the queue working)")
 
     print("\n-- a result for a command nobody issued")
     r = sim.send("POST", "/iclock/devicecmd", {"SN": SN},

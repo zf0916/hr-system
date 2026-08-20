@@ -7,3 +7,8 @@ __pycache__/
 # committed fixture is what the importer is exercised against.
 import/*
 !import/.gitkeep
+
+# Generated sheets. The record HR files is printed from here, not kept here
+# (SPEC §7): the file is an output and is regenerated whenever it is wanted.
+export/*
+!export/.gitkeep

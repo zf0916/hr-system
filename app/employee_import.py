@@ -70,6 +70,11 @@ class StagedRow:
     active_from: dt.date
     left_on: dt.date | None
     device_pin: str | None
+    # Why this row has no PIN, when it has none, and what was unusual about it
+    # when it has one. A count of mappings written cannot tell a correctly
+    # skipped blank from a rejected value, and those are different facts about
+    # HR's list (SPEC §2).
+    pin_note: str = ""
 
 
 log = logging.getLogger("hr.employee_import")
@@ -110,7 +115,8 @@ def build_key(employee_number: str, rules: dict[str, str]) -> str:
 
 
 def read_rows(workbook, mapping: Mapping, session, rules: dict[str, str],
-              accept_odd_numbers: bool) -> Result:
+              accept_odd_numbers: bool,
+              accept_leading_zero_pins: bool = False) -> Result:
     result = Result()
     sheet = open_sheet(workbook, mapping)
     result.headers = read_headers(sheet, mapping)
@@ -206,8 +212,33 @@ def read_rows(workbook, mapping: Mapping, session, rules: dict[str, str],
             ))
 
         pin = None
+        pin_note = "no device_pin column in the mapping"
         if "device_pin" in mapping.columns:
             pin = cell_text(cells["device_pin"]).strip() or None
+            pin_note = "the Device ID cell is empty" if pin is None else ""
+
+            # **The device refuses a leading zero in a user ID** (SPEC §2, §10,
+            # observed at enrollment). A PIN like `0142` cannot exist on the
+            # device, so a mapping row carrying one can never match a punch: it
+            # looks like a working link and silently is not, and the employee's
+            # punches go unattributed with nothing on screen to say why.
+            if pin and len(pin) > 1 and pin.startswith("0"):
+                if accept_leading_zero_pins:
+                    pin_note = (
+                        "accepted deliberately, and no punch from this device "
+                        "can ever carry it (SPEC §2, §10)"
+                    )
+                else:
+                    result.problems.append(RowProblem(
+                        row, "device_pin",
+                        f"{pin!r} starts with a leading zero, and the device "
+                        "refuses one in a user ID (SPEC §10). A punch can never "
+                        "carry this PIN, so the mapping would never match. "
+                        "Correct the list, or re-run with "
+                        "--accept-leading-zero-pins if this list belongs to "
+                        "another device",
+                    ))
+
             if pin and pin in seen_pins:
                 result.problems.append(RowProblem(
                     row, "device_pin",
@@ -231,6 +262,7 @@ def read_rows(workbook, mapping: Mapping, session, rules: dict[str, str],
                 active_from=active_from,
                 left_on=left_on,
                 device_pin=pin,
+                pin_note=pin_note,
             ))
 
     for kind, (_known, added) in vocabulary.items():
@@ -382,7 +414,8 @@ def write(session, mapping: Mapping, result: Result, source: Path,
 
 
 def run_import(session, source: Path, mapping_path: Path, *, replace: bool,
-               allow_new: set[str], accept_odd_numbers: bool) -> Result:
+               allow_new: set[str], accept_odd_numbers: bool,
+               accept_leading_zero_pins: bool = False) -> Result:
     """Read, check everything, then write — or write nothing at all."""
     mapping = read_mapping_file(
         mapping_path, REQUIRED_COLUMNS, OPTIONAL_COLUMNS, ("device_serial",)
@@ -391,7 +424,8 @@ def run_import(session, source: Path, mapping_path: Path, *, replace: bool,
 
     workbook = load_workbook(source, data_only=True, read_only=False)
     try:
-        result = read_rows(workbook, mapping, session, rules, accept_odd_numbers)
+        result = read_rows(workbook, mapping, session, rules, accept_odd_numbers,
+                           accept_leading_zero_pins)
     finally:
         workbook.close()
 
