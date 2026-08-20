@@ -93,6 +93,8 @@ Run it:
     hr calendar adjust --date 2026-05-01 --closes no --reason "..." --by "..."
 
     uv run python tools/corrections_gate.py   # must exit 0
+    docker compose exec api python tools/parser_gate.py   # must exit 0
+    SKIP_DB=1 uv run python tools/parser_gate.py          #   shape half only
 
     hr raw --limit 20                         # what arrived, when, from which
     hr raw --serial PYA8262300072 --body      #   serial, which table, and the
@@ -122,7 +124,11 @@ What the first capture settled: OPERLOG names its cursor `OpStamp`, the handshak
 
 **The second capture is through the receiver and is kept: `raw_request` 96–115.** A handshake and the ten option lines the receiver answered it with, the device's own option push, `INFO` on the next poll, two OPERLOG pushes, two real punches, and the polls between them. The device polls every few seconds — `iClock Proxy/1.09`, `Host: 192.168.60.50:8081` — and everything it sends is in the raw layer, readable with `hr raw` and replayable. SPEC §12 is rewritten against those bytes.
 
-**The parser does not accept the real punch line yet, and that is the next step.** It expects the seven fields §12 used to claim; the device sends ten and a trailing tab. Both real punches are stored — `raw_request` 96 and 109, and `parsed_punch` rows carrying pin, time, status and verify — but flagged `parse_ok = false`, `expected 7 fields, got 11`. **Nothing is lost:** the raw layer has the bytes, and a parser version bump plus `hr replay` turns them into clean rows without the device being involved. Until that happens, no real punch counts as parsed.
+**The parser now accepts the real punch line. Parser version 2, replayed.** Ten fields stored positionally and verbatim, four of them named — pin, device time, status, verify — and the other six left unnamed on purpose. The trailing empty piece is a separator, not a field. Any other shape is a failed row with the line kept whole: nothing is padded, nothing is truncated.
+
+Every real punch in the capture now parses clean. `raw_request` 96, 109 and 129 each yield one row with `parse_ok` true, pin `1`, the device's own time string, status `255`, verify `15` — checked against the stored bytes by `tools/parser_gate.py`, not against a copy of them.
+
+**The replay is also what re-marked the history.** Rows from older simulator runs were seven-field lines that no device ever sent, and under parser 2 they are failures. That is the correct answer for them, and it cost a replay rather than a re-collection.
 
 Artifacts received and analysed: daily attendance sheet, late coming summary and deduction record, individual time-off record, time-off salary summary, SQL Account payroll entry screen, **leave card** — HR's per-employee leave ledger, kept by hand and not in the repo, since it carries a real employee's name and join date. What it settled is in SPEC §6 and §2.
 
@@ -162,7 +168,10 @@ Through the receiver, kept as `raw_request` 96–115. Every line here can be che
 **No real data exists until employees are punching for real** — the start of the parallel run. Until then:
 
 - The database is dropped and recreated whenever the shape changes. No migration files, no ordering, no schema history.
-- Test captures and simulator output are not worth preserving.
+- Simulator output is not worth preserving.
+- **The device's own capture is, and already had to be preserved once.** Parser version 2 changed `parsed_punch`, and the drop would have taken `raw_request` with it. What was done, and what to do again until migrations start: `pg_dump --data-only --table=raw_request`, stop the receiver, `hr seed --force`, restore the dump, `setval` the id sequence, `hr replay`, start the receiver. The ids stay as they were, because SPEC §12 cites them.
+
+**That dump-and-restore is not a migration and does not become one.** It rebuilds one append-only table from its own rows; nothing about the schema's history is recorded, and layer 2 is rebuilt by replay rather than carried across. It is, though, the rehearsal for what comes next.
 
 **From the first day of the parallel run: migrations only.** Raw device capture is append-only from that moment and cannot be recreated — the device does not keep it.
 

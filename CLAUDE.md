@@ -22,6 +22,8 @@ Python/FastAPI managed with **uv** · React + Tailwind · PostgreSQL · Docker C
 
 **There are no migrations yet.** Until employees are punching for real, change the schema by dropping and recreating the database. Do not write migration files. **This changes on the first day of the parallel run** — from then, raw device capture cannot be recreated, and migrations are the only way to change anything.
 
+**Real device capture now exists in the raw layer and cannot be recreated. Never drop that table** — schema changes are still free, but `raw_request` is preserved across them by dump, recreate, restore, replay, the procedure BUILD.md records. That is not a migration and does not become one.
+
 ## Rules
 
 - **New scope stops.** If a request looks like a feature or a structural change the spec does not describe, say so and ask before building. Skip for bug fixes, tooling and scoped continuations.

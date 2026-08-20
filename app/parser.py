@@ -3,12 +3,22 @@
 Everything here is disposable. A parser change means bumping PARSER_VERSION and
 replaying the raw layer — never re-collecting from the device (CLAUDE.md).
 
-The line format is fixed by SPEC.md §12:
+The line format is what the device actually sends, observed in raw_request 96
+and 109 and written down in SPEC.md §12: **ten tab-separated fields and a
+trailing tab**, so a split yields eleven pieces with the last one empty.
 
-    pin, YYYY-MM-DD HH:MM:SS, status, verify, workcode, reserved, reserved
+    1 <tab> 2026-08-20 11:27:27 <tab> 255 <tab> 15 <tab> 0 <tab> 0 <tab> 0 <tab> 0 <tab> 0 <tab> 0 <tab>
 
-tab-separated. Status and verify meanings are unverified, so they are stored as
-strings and nothing branches on them.
+All ten are stored positionally and verbatim in `fields`. **Only four are given
+a name** — pin, device time, status, verify — because those are the four §12 can
+say the meaning of. The other six were `0` in every line ever captured, and a
+name for them would invite logic that nothing has earned. Guessing names from
+documentation is what put a seven-field line in §12 in the first place.
+
+**Anything that is not this shape is a parse failure with the line kept.** No
+padding, no truncation, no coercion. The raw layer still holds the bytes, so a
+shape this parser refuses costs a version bump and a replay — never a
+re-collection from the device.
 """
 
 import datetime as dt
@@ -27,15 +37,16 @@ ATTLOG = "attlog"
 DEFAULT_DECODE_ORDER = "utf-8,gbk,latin-1"
 DEVICE_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-FIELDS = (
-    "pin",
-    "punch_time_text",
-    "status_code",
-    "verify_code",
-    "workcode",
-    "reserved_1",
-    "reserved_2",
-)
+# Observed in raw_request 96 and 109 (SPEC §12).
+FIELD_COUNT = 10
+
+# The only positions with an observed meaning. Position -> column name.
+NAMED_FIELDS = {
+    0: "pin",
+    1: "punch_time_text",
+    2: "status_code",
+    3: "verify_code",
+}
 
 
 def decode_order(session) -> list[str]:
@@ -68,28 +79,43 @@ def parse_line(line: str) -> dict:
     pushed at the wrong route, a truncated batch — decodes to text carrying NUL
     bytes, which a PostgreSQL text column cannot hold. They are dropped for
     storage and the line is marked; the raw layer still has the original bytes.
+
+    A line of the wrong shape is a row with `parse_ok` false and every piece it
+    did split into kept in `fields`. The named values are still read off their
+    positions, because a person reading a failed row wants to see what was
+    there — but on a failed row they mean nothing, and nothing downstream reads
+    a row whose `parse_ok` is false.
     """
     stored = line.replace("\x00", "")
     parts = stored.split("\t")
+
+    # The trailing tab the device sends makes the last piece empty. It is a
+    # separator, not an eleventh field, so it is not stored as one — but its
+    # absence is a different shape, and a different shape is a failure.
+    trailing_empty = len(parts) == FIELD_COUNT + 1 and parts[-1] == ""
+    fields = parts[:FIELD_COUNT] if trailing_empty else parts
+
     row: dict = {
         "raw_line": stored,
         "field_count": len(parts),
+        "fields": fields,
         "parse_ok": True,
         "parse_error": None,
         "punch_time": None,
     }
-    for name, value in zip(FIELDS, parts):
-        row[name] = value.strip() or None
-    for name in FIELDS:
-        row.setdefault(name, None)
+    for position, name in NAMED_FIELDS.items():
+        value = fields[position] if position < len(fields) else None
+        row[name] = (value or "").strip() or None
 
     problems = []
     if stored != line:
         problems.append("NUL bytes dropped for storage; the raw layer has the original")
-    if len(parts) < 2:
-        problems.append(f"expected at least 2 tab-separated fields, got {len(parts)}")
-    if len(parts) != len(FIELDS):
-        problems.append(f"expected {len(FIELDS)} fields, got {len(parts)}")
+    if not trailing_empty:
+        problems.append(
+            f"expected {FIELD_COUNT} tab-separated fields and a trailing tab "
+            f"({FIELD_COUNT + 1} pieces, the last one empty); got {len(parts)} "
+            f"pieces, the last one {parts[-1]!r}"
+        )
     if not row["pin"]:
         problems.append("empty pin")
 

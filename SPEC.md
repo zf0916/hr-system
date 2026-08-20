@@ -394,6 +394,8 @@ The device is the HTTP client. It pushes; we never poll. All routes under `/iclo
 
 `pin`, `YYYY-MM-DD HH:MM:SS`, `status`, `verify`, then **six more fields, every one of them `0` in every line captured, and a trailing tab after the last.** Their meaning is unknown and they are deliberately not named here — a name guessed from documentation is what put a wrong seven-field line in this section in the first place. **The trailing tab means a split on tabs yields eleven pieces, the last one empty.**
 
+**The parsed layer keeps all ten, positionally and verbatim, and names only those four.** The trailing empty piece is a separator, not an eleventh field, and is not stored as one. **A line of any other shape is a failed row with the line kept whole** — never padded to fit, never truncated to fit. That is what makes a shape this parser refuses cost a parser version bump and a replay, rather than a punch.
+
 **The verify field shows the method. Confirmed physically: `15` face, `1` fingerprint** — both tested at the device. This is the field the password-punch count reads (§10).
 
 **Device time carries no offset, and the offset is `+8`, observed.** The device sent `2026-08-20 11:27:27` with no marker of any kind; the server stamped the arrival at `03:27:27+00:00`. Exactly eight hours, consistent with the `TimeZone=8` the receiver sent it. **This is the case that "stored as sent, never converted on the way in" (§14) exists for**: the string is kept, the arrival instant is kept beside it, and the difference is a fact anybody can re-derive rather than a conversion nobody can undo. It is also how clock drift will show (§10). See §9 A32.
@@ -446,6 +448,8 @@ What is still not settled:
 |A fallback password left in place after re-enrollment|That is the permanent shared secret|
 |Logging or retaining a password payload|Purge on completion|
 |Hard-coding a schedule, grace period, threshold, period boundary, leave code or holiday|These are rows|
+|Naming a punch field whose meaning has not been observed|A name invites logic; six of the ten are stored positionally and unnamed|
+|Padding or truncating a punch line to make it fit the expected shape|A wrong shape is a failed row with the line kept, and a replay away from being right|
 |Inferring that a shift crossed midnight by comparing two times|The schedule row states it; the attendance day follows from the shift|
 |Discarding a calendar adjustment when the year is re-uploaded|It is a deliberate decision, kept as its own row and reported|
 |Padding or stripping the employee number on write|Stored verbatim; a separate key does the matching|

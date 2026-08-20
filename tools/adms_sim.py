@@ -427,6 +427,17 @@ def check_db(sim: Sim, baseline: int) -> None:
                   "device time stored as sent, never converted",
                   f"got {row}")
 
+        # The shape the device really sends has to come out clean, or every
+        # real punch is a failed row (SPEC §12, parser version 2).
+        cur.execute(
+            f"SELECT count(*) FROM parsed_punch WHERE {punches} "
+            "AND raw_line LIKE %s AND parse_ok = true AND cardinality(fields) = 10",
+            (baseline, f"{PUNCHES[0][0]}\t{PUNCHES[0][1]}%"),
+        )
+        found = cur.fetchone()[0]
+        sim.check(found >= 2, "the observed shape parses clean, all ten fields kept",
+                  f"found {found}")
+
         cur.execute(
             f"SELECT count(*) FROM parsed_punch WHERE {punches} "
             "AND parse_ok = false AND parse_error IS NOT NULL",

@@ -121,8 +121,20 @@ class ParsedPunch(Base):
     line_no = mapped_column(Integer, nullable=False)
     raw_line = mapped_column(Text, nullable=False)
     decoded_with = mapped_column(Text, nullable=False)
+
+    # How many tab-separated pieces the line split into, before any judgement
+    # about whether that is the right number.
     field_count = mapped_column(Integer, nullable=False)
 
+    # Every field of the line, positionally, verbatim, unnamed. The device
+    # sends ten (SPEC §12) and only four of them have an observed meaning; the
+    # rest are here so that nothing is lost and nothing is guessed. A name
+    # invites logic, so the other six do not get one.
+    fields = mapped_column(ARRAY(Text), nullable=False)
+
+    # The four that are observed. Each is a copy of a position in `fields`,
+    # named because §12 says what it is.
+    #
     # The device PIN as a string, exactly as sent. Not an employee number and
     # not looked up here (SPEC §2, §13).
     pin = mapped_column(Text)
@@ -132,12 +144,11 @@ class ParsedPunch(Base):
     punch_time_text = mapped_column(Text)
     punch_time = mapped_column(DEVICE_TS)
 
-    # Meanings unverified — stored, never interpreted (SPEC §12).
+    # Observed: status is 255 on every punch and verify is 15 for face, 1 for
+    # fingerprint (SPEC §12). Stored as strings; only verify is ever read, by
+    # the password-punch count.
     status_code = mapped_column(Text)
     verify_code = mapped_column(Text)
-    workcode = mapped_column(Text)
-    reserved_1 = mapped_column(Text)
-    reserved_2 = mapped_column(Text)
 
     parse_ok = mapped_column(Boolean, nullable=False)
     parse_error = mapped_column(Text)

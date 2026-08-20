@@ -10,4 +10,6 @@ DATABASE_URL = os.environ.get(
 
 # Bumping this and replaying is how a parser change reaches old captures.
 # Never re-collected from the device (CLAUDE.md, Conventions).
-PARSER_VERSION = "1"
+# 1: the seven-field line SPEC §12 carried from documentation.
+# 2: ten fields and a trailing tab, observed in raw_request 96 and 109.
+PARSER_VERSION = "2"
