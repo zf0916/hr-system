@@ -19,7 +19,7 @@ import sys
 from openpyxl import load_workbook
 
 from app.db import Session
-from app.sheet import excel_layout, period_for, render, to_text
+from app.sheet import excel_layout, page_layout, period_for, render, to_text
 
 
 def read_sheet_file(path) -> dict:
@@ -54,6 +54,16 @@ def read_sheet_file(path) -> dict:
 
     note_cell = worksheet["A4"].value
     return {
+        # How the file prints. The Excel file is the record HR files (SPEC §7),
+        # so a missing page setup is a defect in the artefact even when every
+        # cell is right.
+        "orientation": worksheet.page_setup.orientation,
+        "fit_to_width": worksheet.page_setup.fitToWidth,
+        "fit_to_height": worksheet.page_setup.fitToHeight,
+        "fit_to_page": bool(getattr(worksheet.sheet_properties.pageSetUpPr,
+                                    "fitToPage", None)),
+        "print_title_rows": worksheet.print_titles,
+        "row_breaks": sorted(brk.id for brk in worksheet.row_breaks.brk),
         "title": worksheet["A1"].value,
         "period": worksheet["A2"].value,
         "headcount_line": worksheet["A3"].value,
@@ -90,6 +100,36 @@ def compare(sheet, file_contents: dict) -> list[str]:
                 f"the unread note came out with content: {file_contents['note']!r}")
         if not (file_contents["note_marker"] or "").strip():
             problems.append("the unread note is not marked as unread in the file")
+
+    page = page_layout(sheet)
+    if str(file_contents["orientation"]) != page["orientation"]:
+        problems.append(
+            f"orientation: file {file_contents['orientation']!r} vs "
+            f"{page['orientation']!r} — the file is printed, not read on screen")
+    if file_contents["fit_to_width"] != page["fit_to_width"]:
+        problems.append(
+            f"fit to width: file {file_contents['fit_to_width']!r} vs "
+            f"{page['fit_to_width']!r} — 31 day columns spilling onto a second "
+            "page wide is unreadable")
+    if file_contents["fit_to_height"] != page["fit_to_height"]:
+        problems.append(
+            f"fit to height: file {file_contents['fit_to_height']!r} vs "
+            f"{page['fit_to_height']!r}")
+    if not file_contents["fit_to_page"]:
+        problems.append("fit-to-page is not switched on, so the fit settings "
+                        "are ignored by Excel")
+    # Excel writes the titles qualified and absolute: "'Attendance'!$6:$7".
+    titles = (file_contents["print_title_rows"] or "").split("!")[-1].replace("$", "")
+    if titles != page["print_title_rows"]:
+        problems.append(
+            f"repeating title rows: file {file_contents['print_title_rows']!r} "
+            f"vs rows {page['print_title_rows']} — without them, every page but "
+            "the first is ticks with no day numbers above them")
+    if file_contents["row_breaks"] != page["row_breaks"]:
+        problems.append(
+            f"page breaks: file {file_contents['row_breaks']} vs "
+            f"{page['row_breaks']} — {page['rows_per_page']} rows to a page "
+            "(SPEC §9 A39), and the legend on its own page at the end")
 
     for row in sheet.rows:
         for column in sheet.columns:
@@ -134,6 +174,10 @@ def main() -> int:
     print(f"note:   {contents['note']!r}   marker: {contents['note_marker']!r}")
     print(f"days:   {len(contents['days'])}   employees: "
           f"{len(contents['numbers'])}")
+    print(f"print:  {contents['orientation']}, fit to width "
+          f"{contents['fit_to_width']}, titles {contents['print_title_rows']!r}, "
+          f"{len(contents['row_breaks'])} page break(s) at "
+          f"{contents['row_breaks']}")
     filled = {k: v for k, v in contents["cells"].items() if v}
     print(f"cells with something in them: {len(filled)}")
     for (number, day), value in sorted(filled.items()):

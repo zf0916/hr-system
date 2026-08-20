@@ -406,6 +406,8 @@ def to_excel(sheet: Sheet, path) -> None:
     """
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.worksheet.pagebreak import Break
+    from openpyxl.worksheet.properties import PageSetupProperties
 
     workbook = Workbook()
     worksheet = workbook.active
@@ -464,7 +466,19 @@ def to_excel(sheet: Sheet, path) -> None:
             elif model_cell.manual:
                 cell.fill = manual_fill
 
-    note_row = first_data_row + len(sheet.rows) + 2
+    # How it prints. The file is the filed record, not a screen dump.
+    page = page_layout(sheet)
+    worksheet.page_setup.orientation = page["orientation"]
+    worksheet.page_setup.fitToWidth = page["fit_to_width"]
+    worksheet.page_setup.fitToHeight = page["fit_to_height"]
+    worksheet.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    # The employee header and the weekday row repeat on every page: a page of
+    # ticks with no day numbers above them cannot be read at all.
+    worksheet.print_title_rows = page["print_title_rows"]
+    for row_number in page["row_breaks"]:
+        worksheet.row_breaks.append(Break(id=row_number))
+
+    note_row = page["legend_row"]
     worksheet.cell(note_row, 1, "Legend").font = Font(bold=True)
     for index, (code, label) in enumerate(sheet.legend, start=1):
         worksheet.cell(note_row + index, 1, code)
@@ -477,7 +491,47 @@ def to_excel(sheet: Sheet, path) -> None:
     worksheet.column_dimensions["C"].width = 14
     worksheet.column_dimensions["D"].width = 18
     worksheet.freeze_panes = worksheet.cell(first_data_row, 5)
+    last_column = 4 + len(sheet.columns)
+    worksheet.print_area = (
+        f"A1:{worksheet.cell(1, last_column).column_letter}"
+        f"{note_row + len(sheet.legend) + len(sheet.notes) + 2}"
+    )
     workbook.save(path)
+
+
+def page_layout(sheet: Sheet) -> dict:
+    """How the file prints, derived from the sheet and its rows-per-page row.
+
+    **The Excel file is the record HR files (SPEC §7), so it is a printed
+    artefact** — a spreadsheet that prints its day columns across four pages
+    with no header on three of them is not the sheet HR keeps, whatever the
+    cells say. Everything here follows from `sheet.rows_per_page`, which is a
+    row (§9 A39), so changing the page length is an UPDATE.
+
+    One function, used by the writer and by the check that reads the file back,
+    so the two cannot drift apart silently.
+    """
+    layout = excel_layout()
+    first = layout["first_data_row"]
+    breaks = []
+    # A break after every full page of employee rows, but never after the last
+    # one — that would print a blank page.
+    for offset in range(sheet.rows_per_page, len(sheet.rows), sheet.rows_per_page):
+        breaks.append(first + offset - 1)
+    legend_row = first + len(sheet.rows) + 2
+    # The legend and the notes start their own page. Mid-page they read as a
+    # footnote to whichever employees happen to be above them.
+    if sheet.rows:
+        breaks.append(legend_row - 1)
+    return {
+        "orientation": "landscape",
+        "fit_to_width": 1,
+        "fit_to_height": 0,
+        "print_title_rows": f"{layout['header_row']}:{layout['weekday_row']}",
+        "row_breaks": sorted(set(breaks)),
+        "legend_row": legend_row,
+        "rows_per_page": sheet.rows_per_page,
+    }
 
 
 def excel_layout() -> dict:

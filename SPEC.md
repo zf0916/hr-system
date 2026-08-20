@@ -252,6 +252,8 @@ The Daily Workers Attendance sheet, in HR's existing layout.
 - **A screen, which is the system.** Regenerated on demand, always current with the stored data.
 - **An Excel file in HR's existing layout, which is the record.** That is the artefact that gets filed.
 
+**The file is printed, so it carries a page setup, not just cells.** Landscape, fit to one page wide, and **the employee header and the day-number row repeat on every page** — a page of ticks with no day numbers above them cannot be read at all. A page break every `rows_per_page` rows (§9 A39, a row), and the legend and notes start their own page at the end rather than sitting under whichever employees happen to be above them. **A file whose pagination does not match that row is a defect in the record even when every cell in it is right.**
+
 **This is what makes "never annotated by hand" enforceable rather than a preference.** A filed record somebody writes on is precisely the thing this system replaces: the writing is invisible to everything downstream, and the sheet cannot be regenerated without losing it. Because the screen is always regenerable and the file is only ever printed from it, a correction has one place to go — a row — and the filed copy is reprinted rather than amended.
 
 **HR enters everything through the screen. The Excel file is export only and is never re-uploaded or read back in.** The file travels one way. **An edited sheet coming back would put a correction in a cell instead of a row**, which is the whole thing the never-annotated rule exists to prevent — and it would arrive with no author, no reason and no way to rebuild it.
@@ -311,7 +313,7 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A36|Late minutes are the whole minutes, floored, from scheduled start plus grace to the day's first punch, and are **empty rather than zero** where there is nothing to measure: no punch, a rest day, a closed holiday, or no schedule|
 |A37|**Two device punches for the same employee at the same second are one punch.** The extra pushes are counted as copies and not as punches|
 |A38|A cell is a tick when every punch that day is inside the schedule, and otherwise **the punch times that fall outside it** — the first in when it is later than the scheduled start plus grace, the last out when it is earlier than the scheduled end, both when both are. On a day with no scheduled start, any punch shows as a time|
-|A39|**30 rows to a page.** Headcount and the real sheet's page count are unread|
+|A39|**30 rows to a page**, which is also where the printed page breaks fall. Headcount and the real sheet's page count are unread|
 |A40|**One sheet covers one calendar month.** The 10th, 15th and 20th on the paper sheet may be deadlines rather than boundaries (§5)|
 |A41|**The note in the sheet's top-left has never been read.** The cell renders empty and is marked unread; nothing is guessed into it|
 |A42|A column shades **only when the day is closed for every group on the sheet.** Groups resting on different days would break whole-column shading|

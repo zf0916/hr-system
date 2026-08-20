@@ -44,7 +44,15 @@ from app.models import (
 )
 from app.parser import parse_raw_request
 from app.schedule import set_schedule
-from app.sheet import TICK, TIME, EMPTY, render, to_excel, to_text
+from app.sheet import (
+    EMPTY,
+    TICK,
+    TIME,
+    page_layout,
+    render,
+    to_excel,
+    to_text,
+)
 from tools.sheet_readback import compare, read_sheet_file
 
 DAY_GROUP, NIGHT_GROUP = "GATE-SH-DAY", "GATE-SH-NIGHT"
@@ -386,6 +394,88 @@ def main() -> int:
         contents, problems = in_temp_file(third)
         gate.check(not problems, "and the file follows the render",
                    f"{problems[:2]}")
+        session.rollback()
+
+    print("\n-- the file prints as a filed record (SPEC §7, §9 A39)")
+    with Session() as session:
+        day, night = setup(session)
+        # Enough employees to need more than one page at the seeded 30 a page.
+        ours = [day.id, night.id]
+        for i in range(1, 36):
+            ours.append(make_employee(session, f"96{i:02d}", f"96{i:02d}",
+                                      DAY_GROUP, f"Page Test {i}").id)
+        build_days(session, MONTH_START, MONTH_END, ours)
+        sheet = render(session, MONTH_START, MONTH_END)
+        page = page_layout(sheet)
+        contents, problems = in_temp_file(sheet)
+
+        gate.check(not problems, "the file's page setup matches the render",
+                   f"{problems[:3]}")
+        gate.check(str(contents["orientation"]) == "landscape",
+                   "landscape", f"got {contents['orientation']!r}")
+        gate.check(contents["fit_to_width"] == 1 and contents["fit_to_height"] == 0
+                   and contents["fit_to_page"],
+                   "fit to one page wide, any number of pages tall",
+                   f"width {contents['fit_to_width']} height "
+                   f"{contents['fit_to_height']} on {contents['fit_to_page']}")
+        gate.check(bool(contents["print_title_rows"])
+                   and contents["print_title_rows"].endswith("$6:$7"),
+                   "the employee header and the day numbers repeat on every page",
+                   f"got {contents['print_title_rows']!r}")
+        gate.check(len(sheet.rows) > sheet.rows_per_page,
+                   f"this sheet needs more than one page: {len(sheet.rows)} rows "
+                   f"at {sheet.rows_per_page} a page")
+        gate.check(contents["row_breaks"] == page["row_breaks"]
+                   and len(contents["row_breaks"]) >= 2,
+                   f"a break every {sheet.rows_per_page} rows and one before the "
+                   f"legend: {contents['row_breaks']}",
+                   f"got {contents['row_breaks']}, expected {page['row_breaks']}")
+        gate.check(page["legend_row"] - 1 in contents["row_breaks"],
+                   "the legend starts its own page rather than sitting mid-page",
+                   f"legend at {page['legend_row']}, breaks "
+                   f"{contents['row_breaks']}")
+
+        print("       and now the mistakes:")
+        # Rows per page is a row (A39). A file paginated for one value and a
+        # sheet rendered for another must not pass as agreeing.
+        session.execute(
+            text("UPDATE sheet_setting SET value = '12' "
+                 "WHERE key = 'sheet.rows_per_page'"))
+        session.flush()
+        repaged = render(session, MONTH_START, MONTH_END)
+        gate.check(repaged.rows_per_page == 12,
+                   "changing the row makes the render paginate differently",
+                   f"got {repaged.rows_per_page}")
+        _, mismatch = in_temp_file(sheet, compare_against=repaged)
+        gate.check(any("page breaks" in problem for problem in mismatch),
+                   "a file paginated for 30 against a sheet set to 12 is caught",
+                   f"problems {mismatch[:2]}")
+
+        # And the original defect: a file with no page setup at all.
+        with tempfile.TemporaryDirectory() as directory:
+            from openpyxl import load_workbook
+            path = Path(directory) / "bare.xlsx"
+            to_excel(sheet, path)
+            workbook = load_workbook(path)
+            worksheet = workbook.active
+            worksheet.page_setup.orientation = None
+            worksheet.page_setup.fitToWidth = None
+            worksheet.page_setup.fitToHeight = None
+            worksheet.sheet_properties.pageSetUpPr = None
+            # `print_title_rows = None` does not clear it in openpyxl 3.1 — the
+            # composed value survives — so this reaches for the attribute
+            # behind it. The point is a file that genuinely has no page setup.
+            worksheet._print_rows = None
+            worksheet.row_breaks.brk = ()
+            workbook.save(path)
+            stripped = compare(sheet, read_sheet_file(path))
+            gate.check(len(stripped) >= 5,
+                       "a file with the page setup stripped out is caught",
+                       f"only {len(stripped)} problems: {stripped}")
+            for wanted in ("orientation", "fit to width", "fit-to-page",
+                           "title rows", "page breaks"):
+                gate.check(any(wanted in problem for problem in stripped),
+                           f"  and it names {wanted}", f"{stripped}")
         session.rollback()
 
     print("\n-- what this step deliberately does not do")

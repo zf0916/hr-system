@@ -96,7 +96,7 @@ A cell is a tick when the day's punches are inside the schedule, the punch times
 
 `hr sheet detail` is the per-day punch detail §7 requires: one employee, one period, every day of it, with the punches behind each day, manual entries marked and the leave column present and empty. **It is what Accounts reads instead of the punch card**, and it is not a second sheet — no cells, no shading, no pages.
 
-`tools/sheet_gate.py` is 44 checks. `tools/sheet_readback.py` reads an exported file and compares it to the render that produced it — **it lives in `tools/` because it is a check on the writer, not an ingest path**: nothing in `app/` reads a sheet file, and §13 says why.
+**The Excel is set up to print**: landscape, fit to one page wide, the header and day-number rows repeating on every page, a break every `rows_per_page` rows, and the legend on its own page at the end. It had none of that until it was looked at — every cell was right and the artefact was not. `tools/sheet_gate.py` now checks the page setup against the render and is 59 checks. `tools/sheet_readback.py` reads an exported file and compares it to the render that produced it — **it lives in `tools/` because it is a check on the writer, not an ingest path**: nothing in `app/` reads a sheet file, and §13 says why.
 
 **Deliberately not in step 7:** no period totals, no late coming summary, no Accounts export, no leave entry. A period total is a query over the daily rows and belongs to Milestone 3 (SPEC §3).
 

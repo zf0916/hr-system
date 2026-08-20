@@ -41,22 +41,43 @@ HEADERS = [
 SECTIONS = ["PACK ASSY", "QC", "MAINT", "PROJECT DOOR", "WAREHOUSE"]
 ROLES = ["Production Assistant", "QA/QC", "Charge Hand", "Assistant Supervisor"]
 
-FIRST = ["Ah Meng", "Siti", "Ravi", "Wei Sheng", "Nurul", "Chee Keong", "Mei Ling",
-         "Aung", "Chandran", "Zubaidah", "Kai Xin", "Hafiz", "Su Lin", "Arun",
-         "Boon Hui", "Farah", "Jia Hui", "Kumar", "Lina", "Tze Yang"]
-LAST = ["Tan", "binti Rahman", "a/l Subramaniam", "Lim", "Wong", "Ko Min",
-        "a/l Muthu", "binti Osman", "Chong", "Ismail"]
+# Names have to be distinct across the whole list. Two employees called the
+# same thing on a sheet somebody reads by eye is a mistake waiting to be made,
+# and it is the sort of thing a generator produces by accident when it pairs a
+# short list of firsts with a short list of lasts.
+FIRST = [
+    "Ah Meng", "Siti", "Ravi", "Wei Sheng", "Nurul", "Chee Keong", "Mei Ling",
+    "Aung", "Chandran", "Zubaidah", "Kai Xin", "Hafiz", "Su Lin", "Arun",
+    "Boon Hui", "Farah", "Jia Hui", "Kumar", "Lina", "Tze Yang", "Poh Choo",
+    "Zainal", "Vimala", "Beng Huat", "Rosnah", "Sanjay", "Yoke Lan", "Idris",
+    "Kalai", "Cheng Hoe", "Norhayati", "Prakash", "Swee Lian", "Faizal",
+    "Devi", "Kok Wai", "Anisah", "Ganesan", "Peik Ying", "Rahim",
+]
+LAST = [
+    "Tan", "binti Rahman", "a/l Subramaniam", "Lim", "Wong", "Ko Min",
+    "a/l Muthu", "binti Osman", "Chong", "Ismail", "Lee", "Ng", "a/p Raju",
+    "bin Salleh", "Cheah", "Yap", "Loh", "a/l Nathan", "binti Yusof", "Teoh",
+]
 
 
 def name_for(index: int) -> str:
-    return f"{FIRST[index % len(FIRST)]} {LAST[(index // 3) % len(LAST)]}"
+    """A distinct name per index.
+
+    The two lists are coprime in length (40 and 20 would repeat every 40), so
+    the last name advances on its own cycle and the pair only repeats after
+    len(FIRST) × len(LAST) names. The generator checks for duplicates before it
+    writes, rather than trusting that.
+    """
+    return f"{FIRST[index % len(FIRST)]} {LAST[(index // len(FIRST)) % len(LAST)]}"
 
 
 def rows() -> list[tuple]:
     out: list[tuple] = []
 
     # The real device's own test enrollment. PIN 1, exactly as it punches.
-    out.append(("9001", "Zi Fong (device user 1)", "MAINT", "Charge Hand",
+    # An ordinary name, like everybody else on the list. This row is only
+    # special because its PIN is the one the real device punches with.
+    out.append(("9001", "Yeoh Kim Seng", "MAINT", "Charge Hand",
                 "DAY-PROD", "01/08/2026", "", "1"))
 
     # The simulator's named punches on 2026-08-18.
@@ -116,6 +137,14 @@ def main() -> int:
         sheet.cell(excel_row, 9, joined)
         sheet.cell(excel_row, 10, left)
         sheet.cell(excel_row, 11, pin)
+
+    names = [row[1] for row in data]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise SystemExit(
+            f"the generator produced {len(duplicates)} repeated name(s): "
+            f"{duplicates}. A sheet read by eye needs distinct names"
+        )
 
     footer = header_row + 1 + len(data)
     sheet.cell(footer, 2, "TOTAL")
