@@ -291,10 +291,17 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A35|A day's first in and last out are its earliest and latest punch. **With one punch there is a first in and no last out** — the device does not label direction, so a single punch cannot say which it was|
 |A36|Late minutes are the whole minutes, floored, from scheduled start plus grace to the day's first punch, and are **empty rather than zero** where there is nothing to measure: no punch, a rest day, a closed holiday, or no schedule|
 |A37|**Two device punches for the same employee at the same second are one punch.** The extra pushes are counted as copies and not as punches|
+|A38|A cell is a tick when every punch that day is inside the schedule, and otherwise **the punch times that fall outside it** — the first in when it is later than the scheduled start plus grace, the last out when it is earlier than the scheduled end, both when both are. On a day with no scheduled start, any punch shows as a time|
+|A39|**30 rows to a page.** Headcount and the real sheet's page count are unread|
+|A40|**One sheet covers one calendar month.** The 10th, 15th and 20th on the paper sheet may be deadlines rather than boundaries (§5)|
+|A41|**The note in the sheet's top-left has never been read.** The cell renders empty and is marked unread; nothing is guessed into it|
+|A42|A column shades **only when the day is closed for every group on the sheet.** Groups resting on different days would break whole-column shading|
 
 **Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 is isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
 
 **A21 — "the device pushes the PIN with leading zeros intact" — is answered and gone.** The question never arises: the device refuses to accept a leading zero in a user ID at all (§10). The mapping absorbed it with no code change, which is what §13's rule against resolving a PIN at capture was for.
+
+A38 to A42 are the sheet's, and they are all rows so that the layout has no constants in it. **A38 is the one that decides what a reader sees**: it makes "outside schedule" mean late in or early out, which §5 defines for arrival and §8 only names for departure — so the early half is the unconfirmed half, and a day that is both shows both times separated by a slash. **A41 is deliberately empty rather than filled in**: the note exists on HR's paper, has never been read, and a plausible guess in a filed record is worse than a blank marked unread. **A42 is the one that could quietly stop being true** — §4 makes the rest day a column on the schedule row, so a group resting on another day is legal, and on that day the sheet stops shading and says why rather than shading a column that is not whole.
 
 A35, A36 and A37 are the three the daily row rests on, and all three are about what a figure means rather than what it is worth.
 

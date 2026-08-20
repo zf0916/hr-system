@@ -40,7 +40,7 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 |**4**|**Corrections** — guard entry and HR retroactive entry, both marked and counted|A guard entry cannot be given a time; an HR entry can|
 |**5**|**HR entry** — leave, gate pass, treatment slip, from the paper forms HR already receives|Codes appear on the generated sheet|
 |**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it — **built; the rows exist and a total is a query away**|
-|**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7)|
+|**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7) — **built; leave codes wait on step 5**|
 |**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device|
 |**9**|**Ingestion alert** — warns when punches stop arriving|Silence for N hours raises a warning|
 
@@ -65,6 +65,18 @@ Deliberately not in step 2: no employee screen, no push to the device, no leave,
 **Every schedule and every holiday now in the database is marked provisional.** The 2026 list is still parked. `fixtures/holidays_provisional_2026.xlsx` carries only holidays whose dates are fixed by the calendar — Hari Raya, Chinese New Year, Deepavali, Wesak and Thaipusam are deliberately absent, because a plausible wrong date is worse than a missing one.
 
 Deliberately not in step 3: no late minutes, no daily attendance, no sheet.
+
+**Step 7 is built.** One render, two outputs. `app/sheet.py` builds the sheet once from the daily rows and both emitters draw that same object — `to_text` for the screen, which is the system, and `to_excel` for the file, which is the record HR files (SPEC §7). Every mark a reader can see is decided in the render and carried on the cell; the emitters pick fonts and column widths and nothing else. **The file and the screen cannot disagree about a day**, and the gate proves it by writing the file from one render and comparing it against a second render deliberately made to differ.
+
+A cell is a tick when the day's punches are inside the schedule, the punch times when they are outside it, blank when there was no punch, and marked with an asterisk when a person entered it (A38). Rest days and public holidays shade whole columns from the calendar; a gazetted holiday the factory works does not shade, because only the `closes` flag shades. **Leave codes do not exist** — entry is step 5 — so the leave path is in place, empty, and the sheet says so on its own face rather than leaving it to be noticed.
+
+`hr sheet detail` is the per-day punch detail §7 requires: one employee, one period, every day of it, with the punches behind each day, manual entries marked and the leave column present and empty. **It is what Accounts reads instead of the punch card**, and it is not a second sheet — no cells, no shading, no pages.
+
+`tools/sheet_gate.py` is 44 checks. `tools/sheet_readback.py` reads an exported file and compares it to the render that produced it — **it lives in `tools/` because it is a check on the writer, not an ingest path**: nothing in `app/` reads a sheet file, and §13 says why.
+
+**Deliberately not in step 7:** no period totals, no late coming summary, no Accounts export, no leave entry. A period total is a query over the daily rows and belongs to Milestone 3 (SPEC §3).
+
+**Over the real capture**, August 2026 renders 7 employees on one page — the eighth left on 30 June and is correctly absent from an August sheet. Two cells carry anything: `0090` on the 20th shows `11:26/11:29`, both real device times, late in and early out against a **provisional** schedule; `1627` on the 17th shows `08:03`, a simulator push on a night-shift group. The Excel was exported and read back, and the file agrees with the render about every day for every employee. **Everything on that sheet that is a time is real. Everything that says a time is *late* rests on a schedule row HR has never seen**, and the sheet carries a note saying so.
 
 **Step 6 is built.** One row per employee per day, over parsed punches, corrections and the schedule in force on that day. First in and last out are the day's earliest and latest punch — and with one punch there is a first in and no last out, which the database enforces rather than trusts (A35). Late minutes are computed from that day's schedule row plus its grace, and the row carries the start it was measured against, the schedule row's id, and **whether that schedule is still provisional**, so a figure that rests on a guess reads as one. Manual punches count toward the figures and every figure says whether a person entered it. A re-pushed punch counts once, and the row says how many copies it dropped (A37).
 
@@ -104,6 +116,12 @@ Run it:
 
     uv run python tools/corrections_gate.py   # must exit 0
     uv run python tools/attendance_gate.py    # must exit 0
+    uv run python tools/sheet_gate.py         # must exit 0
+
+    hr sheet render --month 2026-08
+    hr sheet export --month 2026-08 --out /tmp/attendance_2026-08.xlsx
+    hr sheet detail --employee 0090 --from 2026-08-17 --to 2026-08-22 --punches
+    uv run python tools/sheet_readback.py --month 2026-08 --file /tmp/attendance_2026-08.xlsx
 
     hr attendance build --from 2026-08-16 --to 2026-08-21
     hr attendance show --employee 0090 --from 2026-08-20 --detail
@@ -274,7 +292,7 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**Scheduled start and end per group. Read it off the punch card machine before it is decommissioned** — it prints red for out-of-schedule punches, so the schedule is already configured on it|HR / the machine|Late coming|
 |Is there a grace period before a minute counts as late|HR, then management|Late coming|
 |Is lateness measured against a fixed start, or the shift the employee was on that day? Do employees move between shifts?|HR|Late coming|
-|**Which period does each item actually run on** — are the 10th/15th/20th cut-offs deadlines or period boundaries?|HR|All aggregation|
+|**Which period does each item actually run on** — are the 10th/15th/20th cut-offs deadlines or period boundaries? **One sheet covers one calendar month is the assumption** (SPEC §9 A40)|HR|All aggregation, and the sheet's period|
 |Is the 30-minute threshold applied per month or per payroll half?|HR|Milestone 3|
 |What exactly does `AB — absent cut 3 times` cut, and against what?|HR|Milestone 3|
 |Is the employee number always 4 digits, and **what is the PIN for an employee whose number starts with a zero** — the device refuses to store one (SPEC §10)|HR|Enrollment|
@@ -283,8 +301,8 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |What employee groups exist, and does the group decide shift and break?|HR|Schedule|
 |Half-day marks — which leave types can be half days?|HR|Leave|
 |Is there one leave card per leave type per employee, or one card covering all types? The card has no type column|HR|Nothing structural|
-|What is the note in the top-left of the attendance sheet? A close-up photo may answer the schedule question|HR|—|
-|How many pages is the sheet, and what is headcount?|HR|—|
+|**What is the note in the top-left of the attendance sheet** (SPEC §9 A41)? A close-up photo may answer the schedule question. The sheet renders the cell empty and marked unread until it is read|HR|The sheet's top-left cell only|
+|**How many pages is the sheet, and what is headcount** (SPEC §9 A39)? 30 rows to a page is the assumption the renderer uses|HR|Page breaks on the printed sheet|
 |2026 public holidays including Melaka state|HR|Calendar|
 |**How early before a shift, and how late after it, does a punch still belong to that day?** (SPEC §9 A30). The seeded 240 minutes is a guess; real punches settle it|The first real capture|Daily attendance|
 |**Which group runs which shift** (SPEC §9 A31)? The seeded schedules are provisional and marked so in the database|HR|Schedule|
@@ -292,6 +310,8 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**How is a mistaken correction undone?** A guard entry made for the wrong employee cannot be edited or deleted, and SPEC §3 does not say what should replace it|HR, then management|Corrections|
 |**How often does a missed punch actually happen?** It decides whether a signed slip is a formality or whether the real question is enrollment quality|HR|The correction evidence decision|
 |**When is the Excel sheet printed and filed?** Monthly on a period boundary is the assumption. Does not block the build|HR|Nothing structural|
+|**What does a cell show when both the arrival and the departure are outside the schedule** (SPEC §9 A38)? The sheet writes both times, slash-separated. Early departure is named in §8 and defined nowhere|HR|The sheet's cells|
+|**Does any group rest on a day other than Sunday** (SPEC §9 A42)? If one does, a column stops shading wholly, and the sheet reports it rather than shading part of one|HR|Whole-column shading|
 |Confirm the site timezone (SPEC §9 A32), and that a PIN is never reassigned to another employee while old punches still matter (A33)|Zi Fong / HR|Corrections, daily attendance|
 |**Can SQL Account import a file, or is it keyed by hand?** Sample export if yes|Accounts|Milestone 2 deliverable|
 |What do `DW` `MT` `MR` `CL` `HL` `EX` `PT` `AD` `LS` `OOB` mean, and which are actually used? **`CL`, `HL` and `MT` have candidates by content from the leave application form — Compassionate, Hospitalization, Maternity (SPEC §6). Candidates for Accounts to confirm, not decided**|Accounts|Milestone 2|

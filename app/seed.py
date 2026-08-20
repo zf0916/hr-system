@@ -17,6 +17,7 @@ from app.models import (
     ParserSetting,
     Role,
     Section,
+    SheetSetting,
     SiteSetting,
 )
 
@@ -167,6 +168,30 @@ ATTENDANCE_STATUSES = [
 ]
 
 
+# SPEC §9 A38–A42. Everything the sheet would otherwise hard-code. The layout
+# itself comes from HR's existing sheet, which has been analysed; these are the
+# values in it that nobody has confirmed.
+SHEET_SETTINGS = [
+    ("sheet.title", "DAILY WORKERS ATTENDANCE",
+     "the sheet's own name (SPEC §7)"),
+    ("sheet.period_rule", "calendar_month",
+     "A40 — which period one sheet covers. Unconfirmed: the 10th/15th/20th "
+     "cut-offs may be deadlines rather than boundaries (SPEC §5)"),
+    ("sheet.rows_per_page", "30",
+     "A39 — headcount and page count are unread. The real sheet's row count "
+     "settles it"),
+    ("sheet.note_top_left", "",
+     "A41 — the note in the sheet's top-left has never been read. Empty on "
+     "purpose: the renderer marks it unread rather than guessing"),
+    ("sheet.mark_on_schedule", "✓",
+     "a punch inside the schedule is a tick (SPEC §7)"),
+    ("sheet.mark_manual", "*",
+     "a manual punch is marked wherever it appears (SPEC §3, §13)"),
+    ("sheet.time_format", "%H:%M",
+     "how an out-of-schedule punch time is written in a cell"),
+]
+
+
 def seed(session) -> None:
     for serial, label, note in DEVICES:
         session.add(Device(serial_number=serial, label=label, note=note))
@@ -192,4 +217,6 @@ def seed(session) -> None:
         session.add(CorrectionReason(code=code, label=label, path=path, note=note))
     for code, label, note in ATTENDANCE_STATUSES:
         session.add(AttendanceStatus(code=code, label=label, note=note))
+    for key, value, note in SHEET_SETTINGS:
+        session.add(SheetSetting(key=key, value=value, note=note))
     session.commit()

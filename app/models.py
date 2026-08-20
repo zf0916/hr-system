@@ -877,3 +877,29 @@ class DailyAttendance(Base):
 
 Index("ix_daily_attendance_day", DailyAttendance.attendance_day)
 Index("ix_daily_attendance_status", DailyAttendance.status_code)
+
+
+# ---------------------------------------------------------------------------
+# Step 7: the sheet.
+#
+# Nothing about the sheet is stored. It is generated from the daily rows on
+# demand, and the Excel file is an export of the same render (SPEC §7) — so the
+# only rows this step needs are the ones that would otherwise be constants in
+# a layout: how many rows fit a page, what period a sheet covers, the marks a
+# cell uses, and the note in the top-left that nobody has read yet.
+# ---------------------------------------------------------------------------
+
+
+class SheetSetting(Base):
+    """Values the sheet renders with. Assumed, so rows (SPEC §9 A38–A42).
+
+    `sheet.note_top_left` is deliberately empty: the note exists on HR's paper
+    and has never been read. The renderer marks the cell as unread rather than
+    guessing at it, and filling this row in is what settles it.
+    """
+
+    __tablename__ = "sheet_setting"
+
+    key = mapped_column(Text, primary_key=True)
+    value = mapped_column(Text, nullable=False)
+    note = mapped_column(Text)
