@@ -132,9 +132,13 @@ def main() -> int:
 
 
 def check_capture() -> None:
-    """Requests 96 and 109 are the device's own punches. They are the reason
-    this parser version exists, so they are checked against the stored bytes
-    rather than against a copy of them."""
+    """The device's own punches, checked against the bytes they arrived in.
+
+    Not against constants: the first captures happened to be one face punch per
+    request, and neither of those is a property of this parser. A batch of five
+    fingerprint punches in one push is the same shape and has to come out the
+    same way — so every expected value here is read out of the stored body.
+    """
     from sqlalchemy import select
 
     from app.db import Session
@@ -150,31 +154,51 @@ def check_capture() -> None:
         if not raws:
             print("  --    no device ATTLOG capture in this database, skipped")
             return
+
+        verify_codes = set()
         for raw in raws:
+            label = f"raw_request {raw.id}"
+            lines = [line for line in raw.body.decode("ascii", "replace")
+                     .replace("\r\n", "\n").split("\n") if line.strip()]
             rows = session.scalars(
                 select(ParsedPunch)
                 .where(ParsedPunch.raw_request_id == raw.id)
                 .order_by(ParsedPunch.line_no)
             ).all()
-            label = f"raw_request {raw.id}"
-            if not check(len(rows) == 1, f"{label}: one punch row", f"got {len(rows)}"):
+            if not check(len(rows) == len(lines),
+                         f"{label}: one row per line ({len(lines)})",
+                         f"got {len(rows)} rows for {len(lines)} lines"):
                 continue
-            row = rows[0]
-            check(row.parse_ok, f"{label}: parse_ok", f"parse_error {row.parse_error!r}")
-            check(row.pin == "1", f"{label}: pin 1", f"got {row.pin!r}")
-            sent = raw.body.decode("ascii").strip().split("\t")[1]
-            check(row.punch_time_text == sent,
-                  f"{label}: device time as sent ({sent})",
-                  f"got {row.punch_time_text!r}")
-            check(str(row.punch_time) == sent,
-                  f"{label}: timestamp equals the string, unconverted",
-                  f"got {row.punch_time}")
-            check(row.status_code == "255", f"{label}: status 255",
-                  f"got {row.status_code!r}")
-            check(row.verify_code == "15", f"{label}: verify 15",
-                  f"got {row.verify_code!r}")
-            check(len(row.fields) == FIELD_COUNT,
-                  f"{label}: ten fields stored", f"got {row.fields}")
+            for line, row in zip(lines, rows):
+                fields = line.split("\t")
+                check(row.parse_ok, f"{label} line {row.line_no}: parse_ok",
+                      f"parse_error {row.parse_error!r}")
+                check(row.pin == fields[0],
+                      f"{label} line {row.line_no}: pin {fields[0]}",
+                      f"got {row.pin!r}")
+                check(row.punch_time_text == fields[1]
+                      and str(row.punch_time) == fields[1],
+                      f"{label} line {row.line_no}: device time as sent "
+                      f"({fields[1]}), unconverted",
+                      f"got {row.punch_time_text!r} / {row.punch_time}")
+                check(row.status_code == fields[2],
+                      f"{label} line {row.line_no}: status {fields[2]}",
+                      f"got {row.status_code!r}")
+                check(row.verify_code == fields[3],
+                      f"{label} line {row.line_no}: verify {fields[3]}",
+                      f"got {row.verify_code!r}")
+                check(len(row.fields) == FIELD_COUNT,
+                      f"{label} line {row.line_no}: ten fields stored",
+                      f"got {row.fields}")
+                verify_codes.add(row.verify_code)
+
+        check(verify_codes <= {"15", "1"},
+              f"every verify code in the capture is one §12 names: "
+              f"{sorted(verify_codes)}",
+              f"unexpected codes {sorted(verify_codes - {'15', '1'})}")
+        check({"15", "1"} <= verify_codes,
+              "and both are present — face and fingerprint have each been used",
+              f"only {sorted(verify_codes)}")
 
 
 if __name__ == "__main__":

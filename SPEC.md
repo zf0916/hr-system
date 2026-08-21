@@ -104,7 +104,11 @@ A missed, failed or wrong punch is corrected by **adding a row to a separate adj
 
 **The alert reads the database and never asks the device anything.** That is what lets it answer during the outage it exists to catch. It does not re-request a batch and does not recover anything — the device does that by itself.
 
-**The alert watches the serials on the allowlist.** A device that is capturing but was never added to the list is a device nobody is watching, so the check also reports serials that have pushed and are not on it.
+**The alert watches the serials on the allowlist, and the allowlist says which of them are expected to be talking.** A device is not simply on or off the list: it is **live**, **knowingly down** — out for repair, not yet mounted — or **retired**, like a test serial that has served its purpose. Only a live serial is alerted on, and which states are alerted on is a row rather than a branch.
+
+**A serial that stops being watched keeps its row**, its label, its state, when the state changed and why. **Deleting it is not the way to silence it** (§13): the raw layer holds its requests forever, and a list that has forgotten a device cannot say why it went quiet. Standing a device down also clears whatever alert it had raised, because **a permanent known alert is what teaches people to ignore the alert** — which would cost more than the noise it saves.
+
+A device that is capturing but was never added to the list is a device nobody is watching, so the check also reports serials that have pushed and are not on it.
 
 ---
 
@@ -415,7 +419,7 @@ Used for: creating and updating user records, setting and clearing a fallback pa
 
 **Password payloads are plaintext over an unauthenticated endpoint.** Purged on completion, never logged. A further reason the receiver stays on the LAN.
 
-**The queue is built, and it carries two commands: `REBOOT` and `CHECK`.** Neither touches a record on the device. **There is deliberately nothing that clears, deletes or resets anything**, and the reason is in BUILD.md: the device is believed to buffer punches while the receiver is unreachable, and nothing has ever proven it on this hardware. An unbuffered clear would take punches with it and there would be no way to get them back. Adding such a command is a row somebody adds in front of evidence, not a line of code (§13).
+**The queue is built, and it carries two commands: `REBOOT` and `CHECK`.** Neither touches a record on the device. **There is deliberately nothing that clears, deletes or resets anything.** The device's own buffer is the only copy of any punch it has not yet been acknowledged for — that is now observed rather than assumed (§12), and it is precisely what a clear command would delete. Adding such a command is a row somebody adds in front of evidence, not a line of code (§13).
 
 **One command per poll, oldest first, for that serial only.** A device with nothing queued gets exactly the reply it got before the queue existed. The hand-out is marked in the same transaction as the request that collected it, so a command cannot leave without the request that took it being on the record.
 
@@ -503,7 +507,11 @@ What is still not settled:
 
 **Raw capture is what makes building on it acceptable.** Every request is stored whole before anything parses it, so a wrong assumption costs a replay rather than lost punches. **This is the reason the raw layer exists, and why it is never validated or filtered.**
 
-**The device deletes a record only once the server answers `OK`, and it buffers and re-pushes while the server is unreachable.** That is what makes the order in this section load-bearing: **store first, answer second.** An `OK` is a receipt, and a server that answers before storing has told the device to forget something nobody kept — which is exactly what the first capture did (above). It also means **an outage is not data loss**: the device holds the records and re-pushes them on reconnect, up to a transaction capacity of 200,000 (§10), which is years of punching rather than days. **What an outage costs is knowing about it** — the device retries quietly, so silence is the only symptom, and the ingestion alert is the thing that turns silence into a warning.
+**The device deletes a record only once the server answers `OK`, and it buffers and re-pushes while the server is unreachable.** That is what makes the order in this section load-bearing: **store first, answer second.** An `OK` is a receipt, and a server that answers before storing has told the device to forget something nobody kept — which is exactly what the first capture did (above).
+
+**Observed, on this device, after a 20-hour outage nobody planned.** Contact stopped at `2026-08-20 04:38:45Z` and resumed at `2026-08-21 00:50:32Z`. Five punches were made at the reader during that gap — device-local `16:57:20`, `17:03:33`, `17:08:51`, `17:17:08` on the 20th and `08:42:50` on the 21st — and **all five arrived in one push one second after contact resumed**, `raw_request` 3335. The oldest had been held **953 minutes, nearly sixteen hours**. Nothing was lost, nothing was re-collected, and nobody asked the device for anything.
+
+So **an outage is not data loss**: the device holds the records and re-pushes them on reconnect, up to a transaction capacity of 200,000 (§10), which is years of punching rather than days. **What an outage costs is knowing about it** — the device retries quietly, so silence is the only symptom, and the ingestion alert is the thing that turns silence into a warning. That is exactly how this outage went: capture stopped for twenty hours and nothing said so until a device was put on the allowlist and the alert had something to watch.
 
 **Absolute rules on `/iclock/` routes**
 
@@ -527,6 +535,7 @@ What is still not settled:
 |Resolving a device PIN to an employee at capture|Store the string; map downstream|
 |Hand-editing the generated attendance sheet|It cannot then be regenerated|
 |Reading the exported Excel sheet back in|The file goes one way; a returned sheet is a correction in a cell instead of a row|
+|Deleting a serial from the allowlist to stop it alerting|The raw layer keeps its requests forever; the list must say why it stopped being watched. Stand it down instead|
 |Collapsing "no punch" and "absent"|One is a fact, the other a judgement|
 |A guard-typed punch time|Server-stamped only|
 |An unmarked manual punch|It must be visibly countable|
@@ -539,7 +548,7 @@ What is still not settled:
 |Discarding a calendar adjustment when the year is re-uploaded|It is a deliberate decision, kept as its own row and reported|
 |Padding or stripping the employee number on write|Stored verbatim; a separate key does the matching|
 |A partial user update to the device|It wipes the whole record|
-|Queueing a device command that clears, deletes or resets records|Buffering is unproven; an unbuffered clear loses punches with no way back|
+|Queueing a device command that clears, deletes or resets records|The device's buffer is the only copy of an unacknowledged punch — observed holding one for sixteen hours (§12)|
 |Building overtime|Its source is unknown|
 |Designing leave entitlements, the export format, the government-application field set, or reports|Blocked on HR. Stop and say so|
 |Storing passport, IC or medical certificate data|Privacy handling undecided|

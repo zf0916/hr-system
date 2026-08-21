@@ -88,6 +88,8 @@ The simulator now queues a command of each kind, collects them, acts, and report
 
 **The alert reads the database and never asks the device anything**, which is what lets it answer during the outage it exists to catch. `tools/alert_gate.py` is 44 checks, including that `app/alert.py` imports no HTTP client, no mail client and no subprocess — checked on the imports, not on the prose.
 
+**The allowlist carries a state.** `live`, `down` — out for repair, not yet mounted — or `retired`, like a test serial. Only a live serial is alerted on, and the `alerted` column on `device_state` is what decides, so a new kind of not-talking is a row. `hr devices state <serial> <state> --reason "..."` records who changed it and why; `hr devices list` shows the state, when it changed and the reason. **Deleting a serial is not the way to silence it** — the raw layer keeps its requests forever and the list has to say why it went quiet (SPEC §3, §13). Standing a device down also clears whatever it had raised, because a permanent known alert is what teaches people to ignore the alert. The simulator is `retired`: it only talks when a gate is run, so its silence is never news.
+
 **Two things the real run found, and neither was staged.**
 
 **The device has been unreachable since 04:38 UTC.** The alert caught it the moment the device was added to the allowlist: 229 minutes of contact silence, plus punch silence because a shift was nominally running. The receiver is up and answers locally; **the Windows port proxy that carries `192.168.60.50:8081` into WSL2 is gone** — `netsh interface portproxy show all` is empty. This repo already warned about exactly that ("Going live", Prepare). It is the failure mode SPEC §10 describes, and it is the first time anything has caught it.
@@ -160,6 +162,10 @@ Run it:
     hr devices list
     hr alert check --verbose        # silent and 0 when well, loud and 2 when not
     hr alert history
+
+    hr devices states
+    hr devices state SIM0000000001 retired --reason "..." --by "..."
+    hr devices list
 
     hr cmd types
     hr cmd send SIM0000000001 CHECK
@@ -249,6 +255,16 @@ Through the receiver, kept as `raw_request` 96–115. Every line here can be che
 - Whether USB import overwrites or merges existing enrollments. **Bulk-loading employee records makes enrollment materially faster** — the person at the desk then captures only the biometric — and it is step 8's fallback if the command queue turns out awkward on this firmware.
 - The repeat-verification suppression interval (parked above).
 - Register the super administrator. Set verify mode to face and fingerprint only.
+
+---
+
+## The outage happened by itself, and buffering is proven
+
+**It is no longer an assumption.** The receiver was unreachable from `2026-08-20 04:38:45Z` to `2026-08-21 00:50:32Z` — twenty hours, because the Windows port proxy carrying `192.168.60.50:8081` into WSL2 had gone. Five punches were made at the device during that gap. **All five arrived in a single push one second after contact came back** (`raw_request` 3335), the oldest having been held **953 minutes — nearly sixteen hours**. Nothing was lost, nothing was re-collected, and nobody asked the device for anything.
+
+That settles what SPEC §12 had been asserting from the protocol's shape and what this file called unproven: **the device buffers while the receiver is unreachable and re-pushes on reconnect.** It also settles what an outage actually costs, because this one cost exactly that: capture stopped for twenty hours and **nothing said so** until the device was put on the allowlist and the alert had something to watch.
+
+**The rule about destructive commands stands, with a better reason.** The device's buffer is the only copy of a punch it has not been acknowledged for — now observed holding one for sixteen hours — and that is precisely what a clear command would delete (SPEC §11, §13).
 
 ---
 

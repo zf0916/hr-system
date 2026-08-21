@@ -160,10 +160,36 @@ Index("ix_parsed_punch_punch_time", ParsedPunch.punch_time)
 Index("ix_parsed_punch_parse_ok", ParsedPunch.parse_ok)
 
 
+class DeviceState(Base):
+    """Whether a device is expected to be talking.
+
+    Rows, and the `alerted` flag on the row is what the ingestion alert reads —
+    so standing a device down is an UPDATE, and adding a new kind of
+    not-talking is a row rather than a branch.
+
+    **A device is not simply on or off the list.** It can be live, knowingly
+    down — out for repair, not yet mounted — or finished, like a test serial.
+    A permanent alert nobody can silence except by deleting the serial is what
+    teaches people to ignore the alert (SPEC §3, §9 A43-A45).
+    """
+
+    __tablename__ = "device_state"
+
+    code = mapped_column(Text, primary_key=True)
+    label = mapped_column(Text, nullable=False)
+    alerted = mapped_column(Boolean, nullable=False)
+    note = mapped_column(Text)
+
+
 class Device(Base):
     """The serial-number allowlist. An unknown serial is logged and still gets
     200 OK — access control is network position, not a check in the handler
-    (SPEC §12)."""
+    (SPEC §12).
+
+    A serial that stops being watched keeps its row: the raw layer holds its
+    requests forever, and the list has to say why it went quiet. Deleting it
+    would answer neither question (SPEC §13).
+    """
 
     __tablename__ = "device"
 
@@ -171,6 +197,15 @@ class Device(Base):
     label = mapped_column(Text, nullable=False)
     note = mapped_column(Text)
     added_at = mapped_column(SERVER_TS, nullable=False, server_default=func.now())
+
+    state_code = mapped_column(
+        Text, ForeignKey("device_state.code"), nullable=False, default="live"
+    )
+    state_since = mapped_column(SERVER_TS, nullable=False, server_default=func.now())
+    # Why it is in that state, in words, and who put it there. The same reflex
+    # as every other adjustment in this system (SPEC §3).
+    state_reason = mapped_column(Text)
+    state_by = mapped_column(Text)
 
 
 class DeviceOption(Base):

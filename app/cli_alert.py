@@ -64,9 +64,12 @@ def cmd_check(args) -> int:
         lines: list[str] = []
         for status in statuses:
             if not status.watched:
+                since = (status.state_since.strftime("%Y-%m-%d %H:%M")
+                         if status.state_since else "?")
                 lines.append(
-                    f"{status.serial_number}: never heard from — not watched "
-                    "until it is installed (SPEC §9 A45)")
+                    f"{status.serial_number} ({status.label}): not watched — "
+                    f"{status.why_unwatched}"
+                    + (f", since {since}" if status.state_code != "live" else ""))
                 continue
             head = (f"{status.serial_number} ({status.label}): "
                     f"last request {status.minutes_since_contact} min ago, "
@@ -96,9 +99,11 @@ def cmd_check(args) -> int:
                 Path(args.status_file or os.environ[STATUS_FILE_ENV]),
                 lines, bool(alarming))
 
-        if alarming or (stray and args.verbose):
+        if alarming:
             # Loud, and non-zero: this is what a scheduled job turns into a
-            # message on the host the way that host already does it.
+            # message on the host the way that host already does it. **Only
+            # when something is actually wrong** — a header over a clean check
+            # is how a person learns to skim past the word ALERT.
             print("INGESTION ALERT", file=sys.stderr)
             for line in lines:
                 print(line, file=sys.stderr)

@@ -14,6 +14,7 @@ from app.models import (
     Device,
     DeviceCommandType,
     DeviceOption,
+    DeviceState,
     EmployeeNumberRule,
     HolidayScope,
     ParserSetting,
@@ -233,7 +234,28 @@ DEVICE_COMMAND_TYPES = [
 ]
 
 
+# SPEC §3. Whether a device is expected to be talking. The `alerted` column is
+# what the ingestion alert reads, so standing a device down is an UPDATE and a
+# new kind of not-talking is a row.
+DEVICE_STATES = [
+    ("live", "Live — mounted, powered, expected to be talking", True,
+     "the only state the alert watches"),
+    ("down", "Knowingly down — out for repair, or not yet mounted", False,
+     "silence is expected, so silence is not news"),
+    ("retired", "Retired — replaced, or a test serial that has served its "
+                "purpose", False,
+     "kept on the list because the raw layer holds its requests forever"),
+]
+
+
 def seed(session) -> None:
+    # The states first: a device row carries a foreign key to one, so seeding a
+    # device before them fails on the constraint rather than silently.
+    for code, label, alerted, note in DEVICE_STATES:
+        session.add(DeviceState(code=code, label=label, alerted=alerted,
+                                note=note))
+    session.flush()
+
     for serial, label, note in DEVICES:
         session.add(Device(serial_number=serial, label=label, note=note))
     for order, (key, value, note) in enumerate(DEVICE_OPTIONS):

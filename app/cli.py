@@ -25,6 +25,7 @@ from app.employee_import import (
 from app.models import (
     Base,
     DailyAttendance,
+    DeviceState,
     Device,
     DeviceOption,
     DeviceUserMap,
@@ -252,19 +253,73 @@ def cmd_devices_add(args) -> int:
     return 0
 
 
+def cmd_devices_state(args) -> int:
+    """Change whether a device is expected to be talking.
+
+    **This is how a device stops being alerted on — not by deleting it.** The
+    raw layer holds its requests forever, and the list has to say why it went
+    quiet (SPEC §3, §13).
+    """
+    with Session() as session:
+        device = session.get(Device, args.serial)
+        if device is None:
+            print(f"{args.serial} is not on the allowlist", file=sys.stderr)
+            return 1
+        state = session.get(DeviceState, args.state.strip().lower())
+        if state is None:
+            allowed = [row.code for row in session.scalars(select(DeviceState))]
+            print(f"refused: {args.state!r} is not a device state. "
+                  f"Allowed: {sorted(allowed)}", file=sys.stderr)
+            return 1
+        if not args.reason or not args.reason.strip():
+            print("refused: a state change records why, in words",
+                  file=sys.stderr)
+            return 1
+
+        was = device.state_code
+        device.state_code = state.code
+        device.state_since = dt.datetime.now(dt.timezone.utc)
+        device.state_reason = args.reason.strip()
+        device.state_by = args.by
+        session.commit()
+
+        print(f"{device.serial_number}: {was} -> {state.code}")
+        print(f"  {state.label}")
+        print(f"  reason: {device.state_reason}   by: {device.state_by}")
+        print("  alerted on" if state.alerted else
+              "  not alerted on — still recognised, still stored, still listed")
+    return 0
+
+
+def cmd_devices_states(args) -> int:
+    with Session() as session:
+        for row in session.scalars(select(DeviceState).order_by(DeviceState.code)):
+            watched = "watched" if row.alerted else "not watched"
+            print(f"{row.code:<10}{watched:<14}{row.label}")
+            if row.note:
+                print(f"          {row.note}")
+    return 0
+
+
 def cmd_devices_list(args) -> int:
     with Session() as session:
         devices = list(session.scalars(select(Device).order_by(Device.serial_number)))
         if not devices:
             print("the allowlist is empty")
             return 0
+        print(f"{'serial':<18}{'label':<26}{'state':<10}{'since':<21}last heard")
         for device in devices:
             last = session.scalar(
                 select(func.max(RawRequest.received_at))
                 .where(RawRequest.serial_number == device.serial_number)
             )
             heard = last.isoformat(sep=" ", timespec="seconds") if last else "never"
-            print(f"{device.serial_number:<18} {device.label:<24} last heard {heard}")
+            since = device.state_since.strftime("%Y-%m-%d %H:%M:%S")
+            print(f"{device.serial_number:<18}{device.label:<26}"
+                  f"{device.state_code:<10}{since:<21}{heard}")
+            if device.state_code != "live":
+                print(f"{'':<18}not alerted on — {device.state_reason or 'no reason recorded'}"
+                      f" ({device.state_by or 'nobody recorded'})")
     return 0
 
 
@@ -432,8 +487,24 @@ def main() -> int:
     p_dev_add.add_argument("--label", required=True)
     p_dev_add.add_argument("--note")
     p_dev_add.set_defaults(func=cmd_devices_add)
-    dev.add_parser("list", help="what is on the allowlist, and when each was "
-                                "last heard from").set_defaults(func=cmd_devices_list)
+    p_dev_state = dev.add_parser(
+        "state",
+        help="live, down or retired — how a device stops being alerted on "
+             "without being deleted",
+    )
+    p_dev_state.add_argument("serial")
+    p_dev_state.add_argument("state", help="live | down | retired")
+    p_dev_state.add_argument("--reason", required=True,
+                             help="why, in words")
+    p_dev_state.add_argument("--by", default="hr")
+    p_dev_state.set_defaults(func=cmd_devices_state)
+
+    dev.add_parser("states", help="the states a device can be in").set_defaults(
+        func=cmd_devices_states)
+
+    dev.add_parser("list", help="what is on the allowlist, its state, and when "
+                                "each was last heard from").set_defaults(
+        func=cmd_devices_list)
 
     add_schedule_parsers(sub)
     add_corrections_parsers(sub)

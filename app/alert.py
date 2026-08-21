@@ -38,6 +38,7 @@ from app.corrections import site_timezone
 from app.models import (
     AlertSetting,
     Device,
+    DeviceState,
     IngestionAlert,
     ParsedPunch,
     RawRequest,
@@ -78,6 +79,11 @@ class DeviceStatus:
     expectation: str
     alarms: list[Alarm] = field(default_factory=list)
     watched: bool = True
+    state_code: str = "live"
+    state_label: str = ""
+    state_since: dt.datetime | None = None
+    state_reason: str | None = None
+    why_unwatched: str = ""
 
     @property
     def alarming(self) -> bool:
@@ -171,6 +177,7 @@ def status_for(session, device: Device, now: dt.datetime,
     local_now = now.astimezone(ZoneInfo(site_timezone(session))).replace(tzinfo=None)
     expected, expectation = punches_expected(session, local_now, settings)
 
+    state = session.get(DeviceState, device.state_code)
     status = DeviceStatus(
         serial_number=device.serial_number,
         label=device.label,
@@ -180,7 +187,24 @@ def status_for(session, device: Device, now: dt.datetime,
         minutes_since_punch=_minutes(last_punch, now),
         punches_expected=expected,
         expectation=expectation,
+        state_code=device.state_code,
+        state_label=state.label if state else device.state_code,
+        state_since=device.state_since,
+        state_reason=device.state_reason,
     )
+
+    # **A device that is knowingly down is not an outage.** Silence from a
+    # device somebody took off the wall is expected, and an alert nobody can
+    # silence except by deleting the serial is what teaches people to ignore
+    # the alert. The `alerted` flag is a row on device_state, so this is an
+    # UPDATE rather than a branch (SPEC §3).
+    if state is not None and not state.alerted:
+        status.watched = False
+        status.why_unwatched = (
+            f"{state.label}"
+            + (f" — {device.state_reason}" if device.state_reason else "")
+        )
+        return status
 
     # A45: a serial that has never been heard from is not an outage.
     never_heard = last_request is None
@@ -188,6 +212,8 @@ def status_for(session, device: Device, now: dt.datetime,
         settings.get("alert.watch_only_after_first_contact", "yes"))
     if never_heard and only_after_first:
         status.watched = False
+        status.why_unwatched = (
+            "never heard from — not watched until it is installed (A45)")
         return status
 
     contact_threshold = int(settings.get("alert.contact_silence_minutes", "15"))
@@ -274,6 +300,19 @@ def record(session, statuses: list[DeviceStatus]) -> list[IngestionAlert]:
     written: list[IngestionAlert] = []
     for status in statuses:
         if not status.watched:
+            # A device that stops being watched clears whatever it had
+            # standing. Leaving an alert raised forever on a device somebody
+            # deliberately stood down is the noise this whole state exists to
+            # remove.
+            for kind in (CONTACT, PUNCH):
+                if latest_state(session, status.serial_number, kind) == RAISED:
+                    row = IngestionAlert(
+                        serial_number=status.serial_number, kind=kind,
+                        state=CLEARED, minutes_silent=None,
+                        threshold_minutes=None,
+                        detail=f"no longer watched: {status.why_unwatched}")
+                    session.add(row)
+                    written.append(row)
             continue
         alarming = {alarm.kind: alarm for alarm in status.alarms}
         for kind in (CONTACT, PUNCH):

@@ -29,6 +29,7 @@ from app.db import Session
 from app.models import (
     AlertSetting,
     Device,
+    DeviceState,
     EmployeeGroup,
     Holiday,
     ParsedPunch,
@@ -326,6 +327,94 @@ def main() -> int:
                    "with check_punches_when_closed = yes, a Sunday expects "
                    "punches — the row decides, not the code",
                    sunday.expectation)
+        session.rollback()
+
+    print("\n-- a device that is knowingly down is not an outage")
+    with Session() as session:
+        setup(session)
+        now = utc(WEDNESDAY, 11, 0)
+        arrive(session, now - dt.timedelta(hours=6))
+        raised = one(check(session, now=now))
+        gate.check(CONTACT in kinds(raised),
+                   "six hours of silence alarms while the device is live",
+                   f"raised {kinds(raised)}")
+        record(session, [raised])
+
+        session.execute(
+            text("UPDATE device SET state_code = 'down', "
+                 "state_reason = 'off the wall for repair' WHERE serial_number = :s"),
+            {"s": SERIAL})
+        session.flush()
+        session.expire_all()
+        stood_down = one(check(session, now=now))
+        gate.check(not stood_down.alarming and not stood_down.watched,
+                   "the same silence alarms nothing once it is stood down",
+                   f"raised {kinds(stood_down)}")
+        gate.check("repair" in stood_down.why_unwatched,
+                   f"and the reason travels with it: {stood_down.why_unwatched!r}")
+
+        cleared = record(session, [stood_down])
+        gate.check(any(row.kind == CONTACT and row.state == CLEARED
+                       for row in cleared),
+                   "standing alerts are cleared rather than left raised forever",
+                   f"wrote {[(r.kind, r.state) for r in cleared]}")
+        gate.check(latest_state(session, SERIAL, CONTACT) == CLEARED,
+                   "so nothing is left showing raised on a device nobody expects "
+                   "to hear from")
+
+        # Still recognised, still stored, still on the list.
+        device = session.get(Device, SERIAL)
+        gate.check(device is not None and device.state_code == "down",
+                   "the serial is still on the allowlist, not deleted")
+        arrive(session, now)
+        gate.check(session.get(Device, SERIAL) is not None,
+                   "and its requests are still captured and stored")
+
+        # Retired behaves the same way, and live brings it back.
+        session.execute(
+            text("UPDATE device SET state_code = 'retired' WHERE serial_number = :s"),
+            {"s": SERIAL})
+        session.flush()
+        session.expire_all()
+        gate.check(not one(check(session, now=now)).watched,
+                   "a retired serial is not watched either")
+        session.execute(
+            text("UPDATE device SET state_code = 'live' WHERE serial_number = :s"),
+            {"s": SERIAL})
+        session.flush()
+        session.expire_all()
+        # The last request above was at `now`, so the watch is asked about a
+        # later moment: six hours of silence after it came back.
+        later = now + dt.timedelta(hours=6)
+        gate.check(CONTACT in kinds(one(check(session, now=later))),
+                   "and setting it live again starts the watch",
+                   f"raised {kinds(one(check(session, now=later)))}")
+        session.rollback()
+
+    print("\n-- which states are watched is a row, not a branch")
+    with Session() as session:
+        setup(session)
+        codes = {row.code: row.alerted
+                 for row in session.scalars(select(DeviceState))}
+        gate.check(codes == {"live": True, "down": False, "retired": False},
+                   "three states, one of them watched", f"got {codes}")
+
+        now = utc(WEDNESDAY, 11, 0)
+        arrive(session, now - dt.timedelta(hours=6))
+        session.execute(
+            text("UPDATE device SET state_code = 'down' WHERE serial_number = :s"),
+            {"s": SERIAL})
+        session.flush()
+        session.expire_all()
+        gate.check(not one(check(session, now=now)).alarming,
+                   "down is quiet")
+        session.execute(
+            text("UPDATE device_state SET alerted = true WHERE code = 'down'"))
+        session.flush()
+        session.expire_all()
+        gate.check(CONTACT in kinds(one(check(session, now=now))),
+                   "flipping the row's alerted flag makes it alarm — the row "
+                   "decides, not the code")
         session.rollback()
 
     print("\n-- a serial that has never been heard from is not an outage (A45)")
