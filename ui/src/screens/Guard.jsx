@@ -11,7 +11,7 @@
 //
 // **Nothing here undoes an entry.** Once confirmed it is on the record and HR
 // corrects it; what should replace a wrong one is parked and belongs to piece 6.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { ask } from '../api.js'
 
@@ -67,6 +67,8 @@ export default function Guard({ search, go }) {
   const [chosen, setChosen] = useState(null)
   const [reason, setReason] = useState('')
   const [done, setDone] = useState(null)
+  const dialog = useRef(null)
+  const cancelButton = useRef(null)
   const [error, setError] = useState(null)
   const [sending, setSending] = useState(false)
 
@@ -108,7 +110,17 @@ export default function Guard({ search, go }) {
       )
     : []
 
+  const askAgain = () => {
+    dialog.current?.showModal()
+    // **The focus goes to Cancel, deliberately and explicitly.** Leaving it to
+    // the dialog's own rule would put it on whichever button happens to come
+    // first in the markup, which makes the safe default an accident of
+    // ordering that a later edit can silently reverse.
+    cancelButton.current?.focus()
+  }
+
   const confirm = async () => {
+    dialog.current?.close()
     setSending(true)
     setError(null)
     try {
@@ -130,13 +142,17 @@ export default function Guard({ search, go }) {
   }
 
   return (
-    <main className="mx-auto min-h-screen max-w-md bg-slate-50 px-4 py-5">
-      <header className="mb-4 flex items-baseline justify-between">
-        <h1 className="text-lg font-semibold text-slate-900">Guard entry</h1>
+    <main className="mx-auto min-h-screen w-full max-w-md bg-slate-50 px-4 py-5">
+      {/* **Wrapping, and free to shrink.** A flex child will not go
+          narrower than its own content unless it is told it may, and a
+          phone with larger text is the case where that costs the right
+          edge of the page. */}
+      <header className="mb-4 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h1 className="min-w-0 text-lg font-semibold text-slate-900">Guard entry</h1>
         {guard && (
           <button
             onClick={() => rememberGuard('')}
-            className="text-sm text-slate-500 underline"
+            className="min-w-0 break-words text-left text-sm text-slate-500 underline"
           >
             {guard.name} — change
           </button>
@@ -182,7 +198,7 @@ export default function Guard({ search, go }) {
                 key={one.code}
                 data-guard-choice={one.code}
                 onClick={() => rememberGuard(one.code)}
-                className="w-full rounded-lg border border-slate-300 px-4 py-3 text-left text-lg hover:bg-slate-100"
+                className="w-full break-words rounded-lg border border-slate-300 px-4 py-3 text-left text-lg hover:bg-slate-100"
               >
                 {one.name}
                 {one.label && (
@@ -223,7 +239,7 @@ export default function Guard({ search, go }) {
                 key={person.employee_id}
                 data-pick={person.employee_number}
                 onClick={() => go(`/guard?employee=${encodeURIComponent(person.employee_number)}`)}
-                className="w-full rounded-lg border border-slate-200 px-4 py-3 text-left hover:bg-slate-100"
+                className="w-full break-words rounded-lg border border-slate-200 px-4 py-3 text-left hover:bg-slate-100"
               >
                 <span className="font-mono text-slate-500">
                   {person.employee_number}
@@ -246,7 +262,7 @@ export default function Guard({ search, go }) {
           {/* **The safeguard.** The name is the only thing between a mistyped
               number and a punch on somebody else's day, so it is the largest
               thing on the screen. */}
-          <p data-name-back className="mt-2 text-3xl font-semibold leading-tight text-slate-900">
+          <p data-name-back className="mt-2 break-words text-3xl font-semibold leading-tight text-slate-900">
             {chosen.name || '(no name on the assignment rows)'}
           </p>
           <p className="mt-1 font-mono text-lg text-slate-500">
@@ -280,17 +296,62 @@ export default function Guard({ search, go }) {
 
           <Cannot />
 
+          {/* **Submit opens a question; it does not record.** A big green
+              button low on a phone screen is easy to hit while scrolling, and
+              the thing it would have done cannot be undone. */}
           <button
-            data-confirm
+            data-submit
             disabled={!reason || sending}
-            onClick={confirm}
+            onClick={askAgain}
             className="mt-3 w-full rounded-lg bg-emerald-700 px-4 py-4 text-lg font-semibold text-white disabled:bg-slate-300"
           >
-            {sending ? 'Recording…' : 'Confirm — record it now'}
+            {sending ? 'Recording…' : 'Submit'}
           </button>
           <p className="mt-2 text-center text-xs text-slate-500">
             The server records the time. There is nothing here to type it into.
           </p>
+
+          {/* The dialog names the person again. **A dialog that only asks
+              “are you sure?” adds a tap without adding a check** — the name is
+              the safeguard, so the last thing seen before the record is made
+              is the name and the number, not a yes/no. */}
+          <dialog
+            ref={dialog}
+            data-dialog
+            onClose={() => {}}
+            className="w-[22rem] max-w-[calc(100%-2rem)] rounded-xl p-5 backdrop:bg-slate-900/40"
+          >
+            <p data-dialog-question className="text-lg text-slate-900">
+              Record a punch for{' '}
+              <strong className="break-words">
+                {chosen.name || '(no name on the assignment rows)'}
+              </strong>
+              , <span className="font-mono">{chosen.employee_number}</span>?
+            </p>
+            <p className="mt-2 text-sm text-slate-600">
+              {screen.reasons.find((one) => one.code === reason)?.label} · entered
+              by {guard.name}. This cannot be undone.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              {/* Cancel is first and holds the focus: the default answer to a
+                  question you did not mean to ask is no. */}
+              <button
+                data-dialog-cancel
+                ref={cancelButton}
+                onClick={() => dialog.current?.close()}
+                className="min-w-0 flex-1 rounded-lg border border-slate-300 px-4 py-3 text-lg"
+              >
+                Cancel
+              </button>
+              <button
+                data-dialog-confirm
+                onClick={confirm}
+                className="min-w-0 flex-1 rounded-lg bg-emerald-700 px-4 py-3 text-lg font-semibold text-white"
+              >
+                Yes, record it
+              </button>
+            </div>
+          </dialog>
         </Panel>
       )}
     </main>

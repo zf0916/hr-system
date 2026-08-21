@@ -95,8 +95,8 @@ class ScreenReader(html.parser.HTMLParser):
             if key in attributes:
                 self._open, self._tag, self._depth = key, tag, 0
                 self._text = []
-        for key in ("data-reason", "data-guard-choice", "data-confirm",
-                    "data-pick"):
+        for key in ("data-reason", "data-guard-choice", "data-submit",
+                    "data-dialog-cancel", "data-dialog-confirm", "data-pick"):
             if key in attributes:
                 self.buttons.append(f"{key}={attributes[key] or 'yes'}")
 
@@ -429,8 +429,8 @@ def main() -> int:
                                        "data-reason=not_enrolled"],
                    "exactly two reasons are offered on it",
                    f"offered {reasons_offered}")
-        gate.check(any(b.startswith("data-confirm") for b in confirm.buttons),
-                   "and one confirm button")
+        gate.check(any(b.startswith("data-submit") for b in confirm.buttons),
+                   "and one Submit button")
         gate.check(not any("undo" in b or "void" in b or "delete" in b
                            for b in confirm.buttons),
                    "and nothing that undoes anything")
@@ -442,6 +442,107 @@ def main() -> int:
         for kind in TIME_INPUT_TYPES:
             gate.check(f'type="{kind}"' not in page,
                        f"the page's source has no <input type=\"{kind}\">")
+
+        # ---- what only a laid-out, clickable page can answer -------------
+        from tools.browser import Browser
+
+        # The longest name on the roster, because a page that fits “Ravi Tan”
+        # is not a page that fits.
+        roster = json.loads(ask(host, port, "GET", "/api/employees")[1])
+        longest = max(roster["people"], key=lambda person: len(person["name"]))
+        print(f"     (measuring with {longest['employee_number']} "
+              f"{longest['name']!r}, the longest name on the roster)")
+
+        for width in (390, 360, 320):
+            with Browser(width=width, height=780) as browser:
+                for label, path in (
+                    ("pick a guard", "/guard"),
+                    ("pick an employee", "/guard?guard=guard-1"),
+                    ("confirm", f"/guard?guard=guard-1&employee="
+                                f"{longest['employee_number']}"),
+                ):
+                    # **Against `clientWidth`, never `innerWidth`.** When a
+                    # page overflows, the layout viewport grows to fit it and
+                    # `innerWidth` grows with it — so `scrollWidth <=
+                    # innerWidth` is true of a page that is 16px too wide and
+                    # of one that is not. `clientWidth` stays at the device.
+                    measured = json.loads(browser.evaluate(
+                        args.dom_root + path,
+                        "JSON.stringify({scroll: "
+                        "document.documentElement.scrollWidth, "
+                        "view: document.documentElement.clientWidth, "
+                        "over: [...document.querySelectorAll('*')].filter("
+                        "e => e.getBoundingClientRect().right > "
+                        "document.documentElement.clientWidth + 0.5).map("
+                        "e => e.tagName + ' ' + (e.textContent||'')"
+                        ".trim().slice(0, 24)).slice(0, 3)})"))
+                    gate.check(
+                        measured["scroll"] <= measured["view"],
+                        f"“{label}” does not scroll sideways at {width}px",
+                        f"it is {measured['scroll']}px wide in a "
+                        f"{measured['view']}px viewport, pushed out by "
+                        f"{measured['over']}")
+
+        # The dialog, by pressing the page rather than by reading it.
+        with Browser(width=390, height=780) as browser:
+            browser.go(args.dom_root + f"/guard?guard=guard-1&employee="
+                                       f"{args.employee}")
+            # **A tick between the clicks.** Choosing a reason re-renders the
+            # page and only then is Submit enabled; both clicks in one tick hit
+            # a disabled button and prove nothing.
+            opened = browser.evaluate_raw(
+                "(async () => {"
+                "const wait = () => new Promise(r => setTimeout(r, 250));"
+                "document.querySelector('[data-reason=\"biometric_failed\"]')"
+                ".click(); await wait();"
+                "document.querySelector('[data-submit]').click(); await wait();"
+                "const d = document.querySelector('[data-dialog]');"
+                "return JSON.stringify({open: d.open, "
+                "text: d.querySelector('[data-dialog-question]').textContent, "
+                "focused: document.activeElement.hasAttribute('data-dialog-cancel')"
+                " ? 'cancel' : document.activeElement.outerHTML.slice(0, 60)"
+                "});})()")
+            opened = json.loads(opened)
+            gate.check(opened["open"],
+                       "Submit opens a dialog rather than recording")
+            with Session() as session:
+                expected = guard_module.look_up(session, args.employee)
+            gate.check(expected["name"] in opened["text"],
+                       f"the dialog repeats the name: {expected['name']!r}",
+                       f"it says {opened['text']!r}")
+            gate.check(expected["employee_number"] in opened["text"],
+                       f"and the number: {expected['employee_number']!r}",
+                       f"it says {opened['text']!r}")
+            gate.check(opened["focused"] == "cancel",
+                       "and cancel holds the focus — the default answer is no",
+                       f"the focus is on {opened['focused']}")
+
+            # The dialog is on top of the page, and a dialog wider than the
+            # phone is the same defect one layer up.
+            wide = json.loads(browser.evaluate_raw(
+                "JSON.stringify({scroll: "
+                "document.documentElement.scrollWidth, view: "
+                "document.documentElement.clientWidth, dialog: Math.round("
+                "document.querySelector('[data-dialog]')"
+                ".getBoundingClientRect().width)})"))
+            gate.check(wide["scroll"] <= wide["view"],
+                       f"the open dialog does not widen the page "
+                       f"({wide['dialog']}px in {wide['view']}px)",
+                       f"the page became {wide['scroll']}px")
+
+            closed = browser.evaluate_raw(
+                "(async () => {"
+                "document.querySelector('[data-dialog-cancel]').click();"
+                "await new Promise(r => setTimeout(r, 250));"
+                "return document.querySelector('[data-dialog]').open;})()")
+            gate.check(closed is False, "cancel closes it",
+                       f"open is still {closed!r}")
+
+            # And pressing Submit on its own writes nothing at all: only the
+            # dialog's own button does, and this gate never presses that one.
+            gate.check(written() == at_the_start,
+                       "and pressing Submit wrote nothing",
+                       f"manual_punch moved to {written()}")
 
     # **The gate leaves the database as it found it.** This is here because it
     # did not: `guard.record` used to commit, so every run left a guard entry

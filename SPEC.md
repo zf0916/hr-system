@@ -87,6 +87,8 @@ A missed, failed or wrong punch is corrected by **adding a row to a separate adj
 
 **The guard's screen shows the employee's name back before anything is submitted, and that is the verification.** Nothing else stands between a mistyped number and a punch on somebody else's day: the guard is looking at the person, so the name is the one fact he can check, and it is the largest thing on the screen. It is shown *before* the entry exists, because afterwards is too late — **a confirmed entry cannot be undone**, the screen says so in those words, and HR corrects mistakes.
 
+**The last step is a dialog, and it names the person again** — "Record a punch for Ravi Tan, 2002?". The page's own button submits nothing: a large button low on a phone screen is easy to press while scrolling, and what it would do cannot be reversed. **The dialog repeats the name and the number rather than asking "are you sure?"**, because a question that carries no fact adds a tap without adding a check. **Cancel holds the focus**: the default answer to a question nobody meant to ask is no.
+
 **Who the guard is comes from a row, not a text box.** §3 requires every manual punch to say who made it; a typed name is attribution that cannot be checked against anything and spells differently every time. The guard picks himself from the list once and the browser remembers it. **This is not a login** — nothing is checked and nothing is secret, and access control stays network position until Milestone 5 (§14).
 
 **A correction lands on an attendance day the same way a punch does** — through the schedule in force, so a night-shift correction after midnight belongs to the shift's day, not the clock's. It is derived, and rebuilt when a schedule is corrected.
