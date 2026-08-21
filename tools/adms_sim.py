@@ -225,7 +225,14 @@ def collect_command(sim: Sim, response: Response) -> bool:
 def queue_commands(sim: Sim) -> None:
     """Put a command of each kind on this device's queue, straight into the
     database — that is what `hr cmd send` does, and the simulator is standing
-    in for a person typing it."""
+    in for a person typing it.
+
+    **This is the one write in the tools that cannot be rolled back**, because
+    the receiver is another process and would not see an uncommitted row. It is
+    therefore removed again when the run ends (`unqueue_commands`): a queue is
+    a list of instructions waiting for a device, and leaving test instructions
+    standing on one is exactly the state a test has no business leaving behind.
+    """
     import psycopg
 
     with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
@@ -240,6 +247,27 @@ def queue_commands(sim: Sim) -> None:
             sim.queued.append(str(cur.fetchone()[0]))
         conn.commit()
     print(f"queued commands {sim.queued} for {SN}")
+
+
+def unqueue_commands(sim: Sim) -> None:
+    """Take back the rows `queue_commands` committed.
+
+    What arrived through the receiver's own routes stays — the raw requests,
+    the punches parsed from them, and the unsolicited result the route stored.
+    That is capture, and capture is append-only by design (SPEC §12). **What
+    this tool put into the database by hand, it takes out.**
+    """
+    if not sim.queued:
+        return
+    import psycopg
+
+    with psycopg.connect(dsn()) as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM device_command WHERE id = ANY(%s)",
+                    ([int(i) for i in sim.queued],))
+        removed = cur.rowcount
+        conn.commit()
+    print(f"removed the {removed} command(s) this run queued — a gate leaves "
+          f"the database as it found it")
 
 
 def run_cycle(sim: Sim) -> None:
@@ -713,10 +741,15 @@ def main() -> int:
         run_cycle(sim)
     except (ConnectionError, OSError) as exc:
         print(f"\nthe receiver is not answering: {exc}", file=sys.stderr)
+        unqueue_commands(sim)
         return 2
 
     if not args.protocol_only:
-        check_db(sim, baseline)
+        try:
+            check_db(sim, baseline)
+        finally:
+            # After the checks have read them, and whether or not they passed.
+            unqueue_commands(sim)
 
     print(f"\n{sim.requests} requests, {sim.checks} checks")
     if sim.failures:

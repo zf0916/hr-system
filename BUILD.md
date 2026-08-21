@@ -97,9 +97,13 @@ The seven pieces, in order: **1 serving shape** · **2 read-only screens** · 3 
 
 **What the screen cannot carry, said rather than dropped:** only how the file prints — page breaks, the repeating header rows, landscape fitted to one page wide, the legend's own page. The screen scrolls and says so under the grid. Every mark a reader interprets is on both.
 
-**`tools/screens_gate.py` is 83 checks**, and it reads the page out of a real browser — Chromium's own `--dump-dom` inside the Playwright image, no driver package and nothing installed at run time. Broken on purpose, four ways: **the browser truncating a two-time cell** to its first half changed ten cells and was caught only by the DOM check, which is the whole reason that check exists; **dropping the deterministic write** made two exports differ and the download stop matching; **a loop and an import added to a route handler** failed the import check and the AST check together; **widening the fixture-serial pattern** to `^(GATE|TEST|CHECK|NOT|PYA)` made the real device look like a fixture and failed on its serial by name.
+**The grid freezes its edges the way the file does.** The three identifying columns stay put while the days scroll, the day-number and weekday rows stay put while the employees scroll, and the grid scrolls inside a bounded box so the horizontal scrollbar is reachable without passing 58 rows first — the screen's answer to the file's freeze panes and repeating print titles. Each day column is as wide as the widest thing in it, which is the rule `to_text` already followed. **Shading was a header-only stripe and is now the whole column**, cells included, as `to_excel` fills it.
+
+**`tools/screens_gate.py` is 99 checks**, and it reads the page out of a real browser — Chromium's own `--dump-dom` inside the Playwright image, no driver package and nothing installed at run time. Broken on purpose, four ways: **the browser truncating a two-time cell** to its first half changed ten cells and was caught only by the DOM check, which is the whole reason that check exists; **dropping the deterministic write** made two exports differ and the download stop matching; **a loop and an import added to a route handler** failed the import check and the AST check together; **widening the fixture-serial pattern** to `^(GATE|TEST|CHECK|NOT|PYA)` made the real device look like a fixture and failed on its serial by name.
 
 **One of those breaks passed the first time and should not have.** The rebuilt image had not reached the container, so the gate read the old page and agreed with it. The bundle is now checked for the change before the failure is believed — a gate proven against a stale artefact proves nothing.
+
+**A fifth break, and it is the bug that was actually shipped:** the frozen columns were pinned at offsets guessed from utility classes rather than taken from the column widths, so each one sat *over* its neighbour and the first two days of the month disappeared underneath. The gate now reads the `<col>` widths and the sticky offsets out of the DOM and compares them — `found {'80'}, columns are [72, 208, 168]`.
 
 **A gate serial is recognisable now.** Anything a tool invents begins with `GATE-` (SPEC §9 A50), the pattern is a row, and those serials are kept off `hr alert check`'s unwatched list — **counted on it instead**, with `hr alert fixtures` listing them. The list existed to catch one real device nobody was watching, and it had filled with five names from the test tools.
 
@@ -111,7 +115,11 @@ The seven pieces, in order: **1 serving shape** · **2 read-only screens** · 3 
 
 **Reloading the employee list stopped being free.** `--replace` deletes employees, and a leave record or gate pass hangs off one — so it is refused while any HR entry exists, and the list is corrected in place instead. Daily attendance is still cleared with the list, because that is rebuilt from punches; typed forms are not rebuildable from anything.
 
-**The same rule binds the gates.** The import gate used to clear `leave_record` and commit, so that its own case could run — and it destroyed three real records doing it. **A gate makes its own leave record inside the transaction it rolls back, and commits nothing**, because a form somebody signed is not rebuildable from anything and a test fixture is a poor reason to lose one.
+**The same rule binds the gates, and it took a real loss to notice.** The import gate cleared `leave_record` and committed, so that its own case could run. It destroyed every leave record on the working database — the sheet's August notes fell from 8 coded days to 5 — and it had been doing it on every run since step 5. **A gate makes its own rows inside the transaction it rolls back**, because a form somebody signed is not rebuildable from anything and a test fixture is a poor reason to lose one. The rule is now in CLAUDE.md.
+
+**The other gates were audited by counting, not by reading.** Every table's row count taken before and after each run: **the eight in-container gates and the screens gate change nothing at all.** Two tools do write, and both are right to. `serving_gate` adds one `raw_request` because it asks the receiver a real device question over HTTP, and the receiver stores what arrives. The simulator adds thirty requests, the punches parsed from them, and one `device_command` row the route itself writes for a result nobody asked for. **What it used to leave behind as well were the two commands it queued by hand** — the one write in the tools that cannot be rolled back, since the receiver is another process and cannot see an uncommitted row. It now takes those rows back when the run ends. What arrives through the receiver's own routes stays: that is capture, and capture is append-only.
+
+**The demo leave and gate pass for 9001 were restored from BUILD.md's own run block**, which is the only reason they were recoverable. A real form would have been gone.
 
 `tools/hr_entry_gate.py` is 38 checks, and the import gate is 43. Broken on purpose: a record with no day count, a day count recomputed from the range, zero days, a record that says neither type nor code, typed hours, an in time before the out time, a category that is not one of the four, and a code sitting in a cell with no record behind it.
 
@@ -229,7 +237,7 @@ Run it:
     http://<server>:8090/            # employees, on a date
     http://<server>:8090/sheet?month=2026-08
     http://<server>:8090/employee/0090?month=2026-08
-    uv run python tools/screens_gate.py        # 83 checks; reads the real DOM
+    uv run python tools/screens_gate.py        # 99 checks; reads the real DOM
     uv run python tools/screens_gate.py --no-dom   # without Docker
 
     hr alert fixtures                          # what the unwatched list omits

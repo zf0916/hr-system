@@ -10,12 +10,45 @@ import { useEffect, useState } from 'react'
 
 import { ask, monthOf } from '../api.js'
 
-function Cell({ cell }) {
-  if (!cell) return <td className="border border-slate-200" />
+// The frozen edges. Every sticky cell needs an opaque background of its own —
+// what scrolls underneath would otherwise show through — and a border drawn on
+// the cell rather than collapsed between cells, because a collapsed border
+// belongs to neither and scrolls away with the wrong one.
+// The three frozen columns, in pixels, because a sticky offset has to be the
+// exact width of what is to its left. A class that is *nearly* the column's
+// width pins the column over its neighbour instead of beside it.
+const NUMBER_W = 72
+const NAME_W = 208
+const ROLE_W = 168
+const FROZEN_LEFT = [0, NUMBER_W, NUMBER_W + NAME_W]
+const FROZEN_WIDTH = NUMBER_W + NAME_W + ROLE_W
 
-  const classes = ['border', 'border-slate-200', 'text-center', 'whitespace-nowrap', 'px-1']
+const EDGE = 'border-b border-slate-200 '
+const FROZEN_HEAD =
+  'sticky top-0 z-40 h-8 bg-white font-medium border-r border-slate-300 ' + EDGE
+const FROZEN_SECOND =
+  'sticky top-8 z-40 h-8 bg-white border-r border-slate-300 ' + EDGE
+const FROZEN_CELL =
+  'sticky z-20 whitespace-nowrap bg-white px-2 py-1 border-r border-slate-300 ' + EDGE
+const DAY_HEAD =
+  'sticky z-30 h-8 border-r border-slate-200 px-1 text-center font-medium ' + EDGE
+
+function Cell({ cell, shaded }) {
+  if (!cell) return <td className="border-b border-r border-slate-200" />
+
+  // **One background, chosen in the file's order.** A shaded column shades the
+  // whole column, cells included, the way `to_excel` fills it — a header-only
+  // stripe would say the day was closed at the top and say nothing at the row
+  // a reader is actually looking along.
+  const background = shaded
+    ? 'bg-slate-300'
+    : cell.manual
+      ? 'bg-amber-100'
+      : 'bg-white'
+
+  const classes = ['border-b', 'border-r', 'border-slate-200', 'text-center',
+                   'whitespace-nowrap', 'px-1', background]
   if (cell.kind === 'leave') classes.push('font-semibold text-indigo-700')
-  if (cell.manual) classes.push('bg-amber-100')
   // A tick or a time is a claim about a schedule. When that schedule is one HR
   // has never confirmed, the claim is marked where it is made — a banner alone
   // lets a reader take one number off the screen and forget the banner.
@@ -28,6 +61,7 @@ function Cell({ cell }) {
       className={classes.join(' ')}
       data-cell={`${cell.key}`}
       data-kind={cell.kind}
+      data-shaded={shaded ? 'yes' : 'no'}
       title={cell.detail}
     >
       {cell.text}
@@ -48,6 +82,19 @@ export default function Sheet({ search, go }) {
 
   if (error) return <p className="text-red-700">{error}</p>
   if (!data) return <p className="text-slate-500">rendering…</p>
+
+  // Each column as wide as the widest thing in it, which is the rule `to_text`
+  // follows for a terminal. One width for all of them would either clip the
+  // days that carry both an arrival and a departure — and clipping a time is
+  // losing it — or make a month of ticks four screens wide.
+  const columnWidth = (column) =>
+    Math.max(
+      30,
+      10 + 7 * Math.max(2, ...data.rows.map(
+        (row) => (data.cells[`${row.employee_id}:${column.date}`]?.text ?? '').length)),
+    )
+  const dayWidths = data.columns.map(columnWidth)
+  const gridWidth = FROZEN_WIDTH + dayWidths.reduce((total, w) => total + w, 0)
 
   const cellFor = (row, column) => {
     const key = `${row.employee_id}:${column.date}`
@@ -105,19 +152,47 @@ export default function Sheet({ search, go }) {
         </div>
       )}
 
-      <div className="mt-6 overflow-x-auto border border-slate-300 bg-white">
-        <table className="border-collapse text-xs" data-sheet-grid>
+      {/* The grid scrolls inside itself, in both directions. Reaching the
+          horizontal scrollbar must not mean scrolling past every employee
+          first — and the three identifying columns and the two date rows stay
+          put while the rest moves, which is exactly what the file does with
+          freeze panes and repeating print titles (SPEC §7). */}
+      <div
+        data-grid-scroll
+        className="mt-6 max-h-[72vh] overflow-auto border border-slate-300 bg-white"
+      >
+        <table
+          className="table-fixed border-separate border-spacing-0 text-xs"
+          style={{ minWidth: gridWidth }}
+          data-sheet-grid
+        >
+          <colgroup>
+            <col style={{ width: NUMBER_W }} />
+            <col style={{ width: NAME_W }} />
+            <col style={{ width: ROLE_W }} />
+            {data.columns.map((column, index) => (
+              <col key={column.date} style={{ width: dayWidths[index] }} />
+            ))}
+          </colgroup>
           <thead>
             <tr>
-              <th className="sticky left-0 z-10 bg-white px-2 py-1 text-left">No.</th>
-              <th className="bg-white px-2 py-1 text-left">Name</th>
-              <th className="bg-white px-2 py-1 text-left">Role</th>
+              {['No.', 'Name', 'Role'].map((heading, index) => (
+                <th
+                  key={heading}
+                  data-frozen={index}
+                  className={FROZEN_HEAD + ' px-2 text-left'}
+                  style={{ left: FROZEN_LEFT[index] }}
+                >
+                  {heading}
+                </th>
+              ))}
               {data.columns.map((column) => (
                 <th
                   key={column.date}
                   title={column.shade_reason || column.date}
+                  data-day-number={column.date}
                   className={
-                    'border border-slate-200 px-1 text-center font-medium ' +
+                    DAY_HEAD + ' top-0 ' +
                     (column.shaded ? 'bg-slate-300' : 'bg-white')
                   }
                 >
@@ -126,15 +201,16 @@ export default function Sheet({ search, go }) {
               ))}
             </tr>
             <tr>
-              <th className="sticky left-0 z-10 bg-white" />
-              <th className="bg-white" />
-              <th className="bg-white" />
+              {FROZEN_LEFT.map((left, index) => (
+                <th key={left} data-frozen={index} className={FROZEN_SECOND}
+                    style={{ left }} />
+              ))}
               {data.columns.map((column) => (
                 <th
                   key={column.date}
                   data-weekday={column.date}
                   className={
-                    'border border-slate-200 px-1 text-center font-normal text-slate-500 ' +
+                    DAY_HEAD + ' top-8 font-normal text-slate-500 ' +
                     (column.shaded ? 'bg-slate-300' : 'bg-white')
                   }
                 >
@@ -145,8 +221,12 @@ export default function Sheet({ search, go }) {
           </thead>
           <tbody>
             {data.rows.map((row) => (
-              <tr key={row.employee_id} className="hover:bg-slate-50">
-                <th className="sticky left-0 z-10 bg-white px-2 py-1 text-left font-mono font-normal">
+              <tr key={row.employee_id}>
+                <th
+                  data-frozen="0"
+                  className={FROZEN_CELL + ' text-left font-mono font-normal'}
+                  style={{ left: FROZEN_LEFT[0] }}
+                >
                   <a
                     href={`/employee/${encodeURIComponent(row.employee_number)}?month=${month}`}
                     className="text-slate-900 hover:underline"
@@ -154,12 +234,20 @@ export default function Sheet({ search, go }) {
                     {row.employee_number}
                   </a>
                 </th>
-                <td className="whitespace-nowrap bg-white px-2 py-1">{row.name}</td>
-                <td className="whitespace-nowrap bg-white px-2 py-1 text-slate-500">
+                <td data-frozen="1" className={FROZEN_CELL + ' truncate'}
+                    title={row.name} style={{ left: FROZEN_LEFT[1] }}>
+                  {row.name}
+                </td>
+                <td data-frozen="2" className={FROZEN_CELL + ' truncate text-slate-500'}
+                    title={row.role_code} style={{ left: FROZEN_LEFT[2] }}>
                   {row.role_code}
                 </td>
                 {data.columns.map((column) => (
-                  <Cell key={column.date} cell={cellFor(row, column)} />
+                  <Cell
+                    key={column.date}
+                    cell={cellFor(row, column)}
+                    shaded={column.shaded}
+                  />
                 ))}
               </tr>
             ))}

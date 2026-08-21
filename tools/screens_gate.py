@@ -33,6 +33,7 @@ import html.parser
 import http.client
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -97,6 +98,14 @@ class CellReader(html.parser.HTMLParser):
         self.banner = None
         self.note_unread = False
         self.download = None
+        # The frozen edges: what is sticky, how far in it is pinned, and how
+        # wide the columns it is pinned past actually are.
+        self.column_widths: list[int] = []
+        self.frozen: dict[str, list[dict]] = {}
+        self.day_heads: list[str] = []
+        self.weekday_heads: list[str] = []
+        self.grid_scroll: str | None = None
+        self.list_headings: list[str] = []
         self._open: tuple[str, dict] | None = None
         self._text: list[str] = []
 
@@ -115,6 +124,22 @@ class CellReader(html.parser.HTMLParser):
             self.note_unread = True
         if "data-download" in attributes:
             self.download = attributes.get("href")
+        if tag == "col" and attributes.get("style"):
+            width = attributes["style"].replace("width:", "").replace("px", "")
+            self.column_widths.append(int(float(width.strip().rstrip(";"))))
+        if "data-frozen" in attributes:
+            self.frozen.setdefault(attributes["data-frozen"], []).append({
+                "class": attributes.get("class") or "",
+                "style": attributes.get("style") or "",
+            })
+        if "data-day-number" in attributes:
+            self.day_heads.append(attributes.get("class") or "")
+        if "data-weekday" in attributes:
+            self.weekday_heads.append(attributes.get("class") or "")
+        if "data-grid-scroll" in attributes:
+            self.grid_scroll = attributes.get("class") or ""
+        if "data-column-heading" in attributes:
+            self.list_headings.append(attributes.get("class") or "")
 
     def handle_data(self, data):
         if self._open is not None:
@@ -129,6 +154,7 @@ class CellReader(html.parser.HTMLParser):
             self.cells[attributes["data-cell"]] = {
                 "text": text,
                 "kind": attributes.get("data-kind"),
+                "shaded": attributes.get("data-shaded"),
                 "underlined": "decoration-dotted" in (attributes.get("class") or ""),
             }
         elif "data-provisional-banner" in attributes:
@@ -238,6 +264,8 @@ def main() -> int:
                         help="skip the browser check (it needs Docker)")
     parser.add_argument("--dom-url", default=None,
                         help="how the browser container reaches the interface")
+    parser.add_argument("--dom-url-root", default="http://api:8100/",
+                        help="the same host, for the employee list")
     args = parser.parse_args()
 
     from app import detail as detail_view
@@ -357,6 +385,65 @@ def main() -> int:
         gate.check(reader.download and "/api/sheet.xlsx" in reader.download,
                    "and offers the file the export writes",
                    f"download link is {reader.download!r}")
+
+        # **Whole columns shade, cells included.** The file fills every cell in
+        # a closed column; a header-only stripe says the day was closed at the
+        # top of the sheet and says nothing on the row being read along.
+        shaded_dates = {column["date"] for column in expected["columns"]
+                        if column["shaded"]}
+        wrong = [key for key, cell in reader.cells.items()
+                 if (cell["shaded"] == "yes") != (key.split(":", 1)[1] in shaded_dates)]
+        gate.check(not wrong, "every cell of a shaded column is shaded too",
+                   f"{len(wrong)} differ: {wrong[:3]}")
+
+        print("\n-- the grid freezes its edges, the way the file does")
+        scroll = reader.grid_scroll or ""
+        gate.check("overflow-auto" in scroll,
+                   "the grid scrolls inside its own box", f"class {scroll!r}")
+        gate.check("max-h-" in scroll,
+                   "with a bounded height, so the horizontal scrollbar is "
+                   "reachable without scrolling past every employee first",
+                   f"class {scroll!r}")
+
+        # **A sticky offset has to equal the width of everything to its left.**
+        # An offset that is merely close pins the column *over* its neighbour
+        # instead of beside it, and the days underneath disappear.
+        offsets = [0]
+        for width in reader.column_widths[:2]:
+            offsets.append(offsets[-1] + width)
+        for index in ("0", "1", "2"):
+            cells = reader.frozen.get(index, [])
+            gate.check(len(cells) == len(expected["rows"]) + 2,
+                       f"column {index} is frozen in every row and both headers",
+                       f"{len(cells)} of {len(expected['rows']) + 2}")
+            gate.check(cells and all("sticky" in cell["class"] for cell in cells),
+                       f"   and every one of them is sticky")
+            found = {re.search(r"left:\s*(-?\d+)", cell["style"]).group(1)
+                     for cell in cells if re.search(r"left:\s*(-?\d+)", cell["style"])}
+            gate.check(found == {str(offsets[int(index)])},
+                       f"   pinned at {offsets[int(index)]}px — the exact width "
+                       f"of the columns to its left",
+                       f"found {found}, columns are {reader.column_widths[:3]}")
+
+        gate.check(reader.day_heads
+                   and all("top-0" in head for head in reader.day_heads),
+                   f"the day-number row is frozen to the top "
+                   f"({len(reader.day_heads)} columns)")
+        gate.check(reader.weekday_heads
+                   and all("top-8" in head for head in reader.weekday_heads),
+                   "and the weekday row is frozen directly under it")
+
+        print("\n-- and the employee list keeps its headings")
+        roster_reader = CellReader()
+        roster_reader.feed(rendered_dom(args.dom_url_root or "http://api:8100/"))
+        gate.check(len(roster_reader.list_headings) == 7,
+                   f"the list draws its 7 headings",
+                   f"drew {len(roster_reader.list_headings)}")
+        gate.check(roster_reader.list_headings
+                   and all("sticky" in heading and "top-0" in heading
+                           for heading in roster_reader.list_headings),
+                   "and every one of them stays put while the list scrolls",
+                   f"{roster_reader.list_headings[:1]}")
 
     # ---- 3. the download is the filed record ---------------------------
     print("\n-- the download is byte-for-byte `hr sheet export`")

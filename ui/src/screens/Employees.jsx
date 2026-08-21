@@ -44,16 +44,22 @@ export default function Employees({ search, go }) {
         </p>
       )}
 
-      <table className="mt-6 w-full border-collapse bg-white text-sm">
+      {/* The header stays put while the list scrolls. Fifty-eight rows is
+          already more than a screen, and a column of bare numbers with no
+          heading above it is a column somebody has to scroll back up to read. */}
+      <table className="mt-6 w-full border-separate border-spacing-0 bg-white text-sm">
         <thead>
-          <tr className="border-b border-slate-300 text-left text-slate-500">
-            <th className="px-3 py-2 font-medium">No.</th>
-            <th className="px-3 py-2 font-medium">Name</th>
-            <th className="px-3 py-2 font-medium">Section</th>
-            <th className="px-3 py-2 font-medium">Role</th>
-            <th className="px-3 py-2 font-medium">Group</th>
-            <th className="px-3 py-2 font-medium">Device PIN</th>
-            <th className="px-3 py-2 font-medium">Employed</th>
+          <tr className="text-left text-slate-500">
+            {['No.', 'Name', 'Section', 'Role', 'Group', 'Device PIN',
+              'Employed'].map((heading) => (
+              <th
+                key={heading}
+                data-column-heading
+                className="sticky top-0 z-10 border-b border-slate-300 bg-white px-3 py-2 font-medium"
+              >
+                {heading}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
@@ -61,22 +67,22 @@ export default function Employees({ search, go }) {
             <tr
               key={person.employee_id}
               data-employee={person.employee_number}
-              className="cursor-pointer border-b border-slate-100 hover:bg-slate-100"
+              className="cursor-pointer hover:bg-slate-100"
               onClick={() => go(`/employee/${encodeURIComponent(person.employee_number)}`)}
             >
-              <td className="px-3 py-1.5 font-mono">{person.employee_number}</td>
-              <td className="px-3 py-1.5">{person.name}</td>
-              <td className="px-3 py-1.5 text-slate-600">{person.section_code}</td>
-              <td className="px-3 py-1.5 text-slate-600">{person.role_code}</td>
-              <td className="px-3 py-1.5 text-slate-600">{person.group_code}</td>
-              <td className="px-3 py-1.5 font-mono">
+              <td className="border-b border-slate-100 px-3 py-1.5 font-mono">{person.employee_number}</td>
+              <td className="border-b border-slate-100 px-3 py-1.5">{person.name}</td>
+              <td className="border-b border-slate-100 px-3 py-1.5 text-slate-600">{person.section_code}</td>
+              <td className="border-b border-slate-100 px-3 py-1.5 text-slate-600">{person.role_code}</td>
+              <td className="border-b border-slate-100 px-3 py-1.5 text-slate-600">{person.group_code}</td>
+              <td className="border-b border-slate-100 px-3 py-1.5 font-mono">
                 {person.enrolled ? (
                   person.pins.join(', ')
                 ) : (
                   <span className="font-sans text-amber-700">not enrolled</span>
                 )}
               </td>
-              <td className="px-3 py-1.5 text-slate-600">
+              <td className="border-b border-slate-100 px-3 py-1.5 text-slate-600">
                 {person.active_from}
                 {person.left_on ? ` → ${person.left_on}` : ''}
               </td>

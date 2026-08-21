@@ -309,7 +309,9 @@ The Daily Workers Attendance sheet, in HR's existing layout.
 
 **One render stands behind both, and behind the terminal too.** The sheet is built once and every output draws that same object; a cell's text, whether it is a tick, a time or a code, whether a person entered it, and whether its column shades are all decided in that one place. **An output chooses fonts, colours and widths and nothing else.** The screen and the filed file therefore cannot come to differ about what a day says — not because they are kept in step, but because there is nothing to keep in step.
 
-**The screen carries everything the file carries except how it prints.** Page breaks, the repeating header, landscape, fit-to-width and the legend's own page are facts about paper; the screen scrolls instead. Every mark a reader interprets — cells, shading, the manual asterisk, the legend, the notes — is on both.
+**The screen carries everything the file carries except how it prints.** Page breaks, landscape, fit-to-width and the legend's own page are facts about paper; the screen scrolls instead. Every mark a reader interprets — cells, shading, the manual asterisk, the legend, the notes — is on both.
+
+**The file's freeze panes and repeating print titles are not one of those exceptions.** They exist because a row of ticks with no name beside it and no day number above it cannot be read, and that is as true on a screen as on paper: the identifying columns stay put while the days scroll, the day-number and weekday rows stay put while the employees scroll, and the grid scrolls within its own bounds so reaching the days at the end of the month does not mean scrolling past everybody first.
 
 **The same period always exports to the same bytes.** Nothing in the file varies with the moment it was made: the document's own timestamps describe the period it covers rather than the export. A filed record that differs from a fresh render only in the clock cannot be compared with anything, and comparing it is how anybody checks that a filed sheet still matches what the system holds.
 
