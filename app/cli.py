@@ -44,6 +44,7 @@ from app.models import (
 from app.cli_alert import add_parsers as add_alert_parsers
 from app.cli_attendance import add_parsers as add_attendance_parsers
 from app.cli_cmd import add_parsers as add_cmd_parsers
+from app.cli_hr_entry import add_parsers as add_hr_entry_parsers
 from app.corrections import employee_by_number
 from app.cli_corrections import add_parsers as add_corrections_parsers
 from app.cli_raw import add_parsers as add_raw_parsers
@@ -513,6 +514,7 @@ def main() -> int:
     add_sheet_parsers(sub)
     add_alert_parsers(sub)
     add_cmd_parsers(sub)
+    add_hr_entry_parsers(sub)
 
     args = parser.parse_args()
     return args.func(args)

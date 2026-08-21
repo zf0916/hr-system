@@ -15,12 +15,14 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Computed,
     DDL,
     Date,
     ForeignKey,
     Index,
     Integer,
     LargeBinary,
+    Numeric,
     Text,
     Time,
     event,
@@ -1097,3 +1099,176 @@ class DeviceCommand(Base):
 Index("ix_device_command_serial", DeviceCommand.serial_number, DeviceCommand.id)
 Index("ix_device_command_pending", DeviceCommand.serial_number,
       DeviceCommand.handed_out_at)
+
+
+# ---------------------------------------------------------------------------
+# Step 5: HR entry — leave and gate pass.
+#
+# **This is HR typing a form that has already been signed on paper** (SPEC §5,
+# §6). No approval is routed, no entitlement is checked and no balance is kept:
+# those are Milestone 5, and a signature block on the paper is not a workflow.
+#
+# Two rules from the forms are structural here rather than advisory:
+#
+#   * **The number of days is what the form says.** It is required, and nothing
+#     in this system computes it from the range — a half day, and a non-working
+#     day inside a range, both mean the count and the span are different numbers
+#     (SPEC §6).
+#   * **The hours on a gate pass are never typed.** The form carries an out time
+#     and an in time and no hours at all, so hours is a generated column: there
+#     is no field to type into (SPEC §5).
+# ---------------------------------------------------------------------------
+
+
+class LeaveCode(Base):
+    """A code from the sheet legend — what HR writes in a cell (SPEC §6).
+
+    Rows, because §13 forbids hard-coding a leave code. The legend prints
+    `T / C` on one line; they are two codes and a cell can only hold one, so
+    they are two rows.
+    """
+
+    __tablename__ = "leave_code"
+
+    code = mapped_column(Text, primary_key=True)
+    label = mapped_column(Text, nullable=False)
+    note = mapped_column(Text)
+
+
+class LeaveType(Base):
+    """A tick on the leave application form — what an employee applies for.
+
+    `suggested_sheet_code` is the convenience A48 describes and nothing more:
+    it is what the entry screen offers before HR touches it. **Four of the
+    seven types have none**, because the legend has no letter for them, and the
+    screen offers nothing rather than inventing one.
+    """
+
+    __tablename__ = "leave_type"
+
+    code = mapped_column(Text, primary_key=True)
+    label = mapped_column(Text, nullable=False)
+    sort_order = mapped_column(Integer, nullable=False, default=0)
+    suggested_sheet_code = mapped_column(Text, ForeignKey("leave_code.code"))
+    reason_required = mapped_column(Boolean, nullable=False, default=False)
+    note = mapped_column(Text)
+
+
+class LeaveRecord(Base):
+    """One line of leave, as the form has it.
+
+    **Both vocabularies are stored and neither is derived from the other**
+    (SPEC §6): `leave_type_code` is what was applied for, `sheet_code` is what
+    HR writes on the sheet, and either may be empty — a form type with no code,
+    or a code HR wrote with no form behind it. Filling one in from the other
+    would invent a mapping the paper does not contain.
+
+    `sql_account_code` is carried from the start and stays empty until Accounts
+    answers what the payroll codes mean (SPEC §8).
+    """
+
+    __tablename__ = "leave_record"
+
+    id = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    employee_id = mapped_column(BigInteger, ForeignKey("employee.id"), nullable=False)
+
+    leave_type_code = mapped_column(Text, ForeignKey("leave_type.code"))
+    sheet_code = mapped_column(Text, ForeignKey("leave_code.code"))
+
+    period_from = mapped_column(Date, nullable=False)
+    period_to = mapped_column(Date, nullable=False)
+
+    # As given on the form. Never computed from the range, and required so that
+    # there is nothing for a later default to quietly fill in.
+    days = mapped_column(Numeric(5, 2), nullable=False)
+
+    # When leave was asked for, which is a different fact from when it was
+    # taken. The form has its own date field for it (SPEC §6).
+    date_of_application = mapped_column(Date)
+
+    reason = mapped_column(Text)
+    sql_account_code = mapped_column(Text)
+
+    entered_by = mapped_column(Text, nullable=False)
+    entered_at = mapped_column(SERVER_TS, nullable=False, server_default=func.now())
+    note = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "leave_type_code IS NOT NULL OR sheet_code IS NOT NULL",
+            name="leave_record_says_what_it_is",
+        ),
+        CheckConstraint("period_to >= period_from", name="leave_record_dates_ordered"),
+        CheckConstraint("days > 0", name="leave_record_days_positive"),
+        # A15: a half day is stored as a fraction, and 0.5 is the only fraction
+        # anybody has described.
+        CheckConstraint("mod(days * 2, 1) = 0", name="leave_record_days_are_halves"),
+        CheckConstraint(
+            "length(btrim(entered_by)) > 0", name="leave_record_entered_by_recorded"
+        ),
+    )
+
+
+Index("ix_leave_record_employee_period", LeaveRecord.employee_id,
+      LeaveRecord.period_from, LeaveRecord.period_to)
+
+
+class GatePassCategory(Base):
+    """The four ticks on the gate pass (SPEC §5). Rows, and exactly four."""
+
+    __tablename__ = "gate_pass_category"
+
+    code = mapped_column(Text, primary_key=True)
+    label = mapped_column(Text, nullable=False)
+    sort_order = mapped_column(Integer, nullable=False, default=0)
+    note = mapped_column(Text)
+
+
+class GatePass(Base):
+    """One gate pass, as the form has it.
+
+    **There is no department field**, because the form has none — the
+    employee's section is looked up (SPEC §5, §2).
+
+    **`hours` is generated by the database from the two times.** The form
+    carries no hours at all, so there is no field to type into: the same reflex
+    as the guard entry that has no field for a time (SPEC §3). A pass has one
+    date and two times, so the in time is later than the out time on that same
+    date.
+    """
+
+    __tablename__ = "gate_pass"
+
+    id = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    employee_id = mapped_column(BigInteger, ForeignKey("employee.id"), nullable=False)
+    pass_date = mapped_column(Date, nullable=False)
+    category_code = mapped_column(
+        Text, ForeignKey("gate_pass_category.code"), nullable=False
+    )
+    reason = mapped_column(Text)
+    destination = mapped_column(Text)
+
+    # Filled in by the guard on the paper form, typed by HR on entry — not the
+    # guard entry path in §3, which is server-stamped (SPEC §5).
+    out_time = mapped_column(Time, nullable=False)
+    in_time = mapped_column(Time, nullable=False)
+
+    hours = mapped_column(
+        Numeric(5, 2),
+        Computed("round(extract(epoch from (in_time - out_time)) / 3600.0, 2)",
+                 persisted=True),
+    )
+
+    entered_by = mapped_column(Text, nullable=False)
+    entered_at = mapped_column(SERVER_TS, nullable=False, server_default=func.now())
+    note = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("in_time > out_time", name="gate_pass_in_after_out"),
+        CheckConstraint(
+            "length(btrim(entered_by)) > 0", name="gate_pass_entered_by_recorded"
+        ),
+    )
+
+
+Index("ix_gate_pass_employee_date", GatePass.employee_id, GatePass.pass_date)

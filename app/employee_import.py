@@ -26,10 +26,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from openpyxl import load_workbook
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.models import (
     DailyAttendance,
+    GatePass,
+    LeaveRecord,
     DeviceUserMap,
     Employee,
     EmployeeAssignment,
@@ -430,6 +432,29 @@ def run_import(session, source: Path, mapping_path: Path, *, replace: bool,
         workbook.close()
 
     if replace:
+        # **HR entry is not derivable and is never cleared with the list.**
+        # Daily attendance goes because it is rebuilt from punches; a leave
+        # record and a gate pass are forms somebody typed off paper, and
+        # deleting the employee they hang on would take them with it. Once HR
+        # has typed anything, the list is corrected in place rather than
+        # replaced wholesale (SPEC §5, §6).
+        typed = {
+            "leave_record": session.scalar(
+                select(func.count()).select_from(LeaveRecord)) or 0,
+            "gate_pass": session.scalar(
+                select(func.count()).select_from(GatePass)) or 0,
+        }
+        if any(typed.values()):
+            counted = ", ".join(f"{count} {name}" for name, count in typed.items()
+                                if count)
+            result.problems.append(RowProblem(
+                None, "--replace",
+                f"{counted} recorded against the employees now loaded. "
+                "--replace deletes employees, and HR typed those forms off "
+                "paper — they cannot be rebuilt from anything. Load without "
+                "--replace, or decide what should happen to them first",
+            ))
+            return result
         result.written = {}
         cleared = clear_employees(session)
         session.flush()

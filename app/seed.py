@@ -15,6 +15,9 @@ from app.models import (
     DeviceCommandType,
     DeviceOption,
     DeviceState,
+    GatePassCategory,
+    LeaveCode,
+    LeaveType,
     EmployeeNumberRule,
     HolidayScope,
     ParserSetting,
@@ -257,6 +260,53 @@ DEVICE_STATES = [
 ]
 
 
+# SPEC §6, the sheet legend. Rows, because §13 forbids hard-coding a leave
+# code. The legend prints `T / C` on one line; a cell holds one letter, so they
+# are two rows.
+LEAVE_CODES = [
+    ("AL", "Annual leave", None),
+    ("MC", "Medical leave", None),
+    ("EL", "Emergency leave",
+     "written on the sheet; there is no box for it on the application form"),
+    ("UL", "Unpaid leave", None),
+    ("PH", "Public holiday", None),
+    ("AB", "Absent — cut 3 times", "the calculation itself is unconfirmed"),
+    ("SS", "Suspended", None),
+    ("T", "Temporary", "the legend prints `T / C` on one line"),
+    ("C", "Contract", "the legend prints `T / C` on one line"),
+]
+
+# SPEC §6, the ticks on the leave application form, in the form's own order.
+# The third column is the sheet code the entry screen suggests (A48) — a
+# convenience, not a mapping. **Four of the seven have none**, because the
+# legend has no letter for them, and the screen offers nothing rather than
+# inventing one.
+LEAVE_TYPES = [
+    ("ANNUAL", "Annual", 1, "AL", False, None),
+    ("COMPASSIONATE", "Compassionate", 2, None,
+     False, "no legend code exists for this (SPEC §6)"),
+    ("HOSPITALIZATION", "Hospitalization", 3, None,
+     False, "no legend code exists for this (SPEC §6)"),
+    ("SOCSO", "Ind. Accident (SOCSO)", 4, None,
+     False, "no legend code exists for this (SPEC §6)"),
+    ("SICK", "Sick", 5, "MC", False, "a sick certificate is attached"),
+    ("MATERNITY", "Maternity", 6, None,
+     False, "no legend code exists for this (SPEC §6)"),
+    ("UNPAID", "Unpaid Leave", 7, "UL", True,
+     "the form carries a Reason of its own for this one"),
+]
+
+# SPEC §5, the four ticks on the gate pass. Medical Treatment is a category and
+# nothing else: there is no treatment slip.
+GATE_PASS_CATEGORIES = [
+    ("OFFICIAL", "Official", 1, None),
+    ("PERSONAL", "Personal", 2, "what the specimen time-off record reads"),
+    ("MEDICAL_TREATMENT", "Medical Treatment", 3,
+     "a reason for leaving the premises, not a document (SPEC §5)"),
+    ("OTHERS", "Others", 4, None),
+]
+
+
 def seed(session) -> None:
     # The states first: a device row carries a foreign key to one, so seeding a
     # device before them fails on the constraint rather than silently.
@@ -287,6 +337,16 @@ def seed(session) -> None:
         session.add(SiteSetting(key=key, value=value, note=note))
     for code, label, path, note in CORRECTION_REASONS:
         session.add(CorrectionReason(code=code, label=label, path=path, note=note))
+    for code, label, note in LEAVE_CODES:
+        session.add(LeaveCode(code=code, label=label, note=note))
+    session.flush()
+    for code, label, order, suggested, reason_required, note in LEAVE_TYPES:
+        session.add(LeaveType(code=code, label=label, sort_order=order,
+                              suggested_sheet_code=suggested,
+                              reason_required=reason_required, note=note))
+    for code, label, order, note in GATE_PASS_CATEGORIES:
+        session.add(GatePassCategory(code=code, label=label, sort_order=order,
+                                     note=note))
     for code, label, note in ATTENDANCE_STATUSES:
         session.add(AttendanceStatus(code=code, label=label, note=note))
     for key, value, note in SHEET_SETTINGS:

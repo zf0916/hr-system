@@ -31,6 +31,7 @@ Python/FastAPI managed with **uv** · React + Tailwind · PostgreSQL · Docker C
 - **Every assumed value is a row, never a constant.** Schedules, grace periods, thresholds, period boundaries, leave codes, holidays. **A new assumption made while implementing gets added to SPEC.md §9 in the same task.**
 - **Run the device simulator after any change to a device route.** It exercises duplicate re-push, a GBK body, a binary photo and malformed input. It must exit clean.
 - **A gate is not passed until a deliberate mistake makes it fail.**
+- **Correct in place and leave no trace.** A claim that never left the repo needs no note saying it changed — no "an earlier version said", no "this used to be". **Supersede only when the wrong version escaped**: code was written on it, a file was produced from it, or somebody was told. Keep the reason a correction taught, which is usually a domain fact worth stating on its own.
 - **Say nothing about commit state without running `git status` first.** A report describes the repository, not what this session happened to do. Work committed by somebody else is committed, and "still uncommitted" written from memory is a claim about the past — this repo gets committed between tasks. If it has not been checked, leave it out.
 - Update SPEC.md in the same task when a change makes something in it untrue. A stale spec actively misleads.
 

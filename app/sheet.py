@@ -10,9 +10,10 @@ else**, which is what makes it impossible for the file and the screen to
 disagree about what a day says.
 
 What a cell holds (SPEC §7): a tick when the punch is on schedule, the actual
-punch time when it is outside it, or a leave code. **Leave codes do not exist
-yet** — entry is step 5 — so the leave path is here, empty, and the sheet says
-so rather than pretending.
+punch time when it is outside it, or a leave code. **Leave takes the cell when
+there is leave** (SPEC §9 A49): a day with a leave record shows its sheet code,
+and a day whose leave has no sheet code shows nothing rather than inventing a
+letter — four of the seven form types have no code at all (§6).
 
 Rest days and public holidays shade whole columns, from the calendar, never per
 employee (SPEC §4). Manual punches are marked (SPEC §3).
@@ -28,6 +29,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
+from app.hr_entry import leave_by_day, leave_codes
 from app.models import (
     DailyAttendance,
     Employee,
@@ -130,7 +132,7 @@ def period_for(session, month: str) -> tuple[dt.date, dt.date]:
 
 
 def _cell_for(row: DailyAttendance | None, employee_id: int, day: dt.date,
-              marks: dict[str, str]) -> Cell:
+              marks: dict[str, str], leave=None) -> Cell:
     """One day for one employee, from its daily row and nothing else.
 
     A38: a tick when every punch that day is inside the schedule; otherwise the
@@ -138,17 +140,43 @@ def _cell_for(row: DailyAttendance | None, employee_id: int, day: dt.date,
     scheduled start plus grace, the last out when it is earlier than the
     scheduled end. Both, when both are.
     """
+    # **A coded leave day is a leave cell** (A49). A day somebody was on leave
+    # is not a day they failed to punch, and the code is what HR writes.
+    leave_detail = ""
+    if leave is not None:
+        leave_detail = f"leave record {leave.record_id}"
+        if leave.type_label:
+            leave_detail += f": {leave.type_label}"
+        leave_detail += f", {leave.days} day(s)"
+        if row is not None and row.punch_count:
+            leave_detail += f"; {row.punch_count} punch(es) on the same day"
+
+        if leave.sheet_code:
+            return Cell(
+                employee_id, day, leave.sheet_code, LEAVE,
+                leave_code=leave.sheet_code,
+                punch_count=row.punch_count if row is not None else 0,
+                provisional=row.schedule_provisional if row is not None else False,
+                detail=leave_detail,
+            )
+        # **No code on the record: the cell falls through to the punches.**
+        # Four of the seven form types have no legend letter (§6) and none is
+        # borrowed from the type — but blanking the cell would hide a punch
+        # that really happened, so what the punches say is what shows.
+        leave_detail += " — the record carries no sheet code, so this cell "
+        leave_detail += "shows the punches instead of a letter"
+
     if row is None:
         return Cell(employee_id, day, "", EMPTY,
                     detail="no daily row: not employed, or not built")
 
-    # Leave is step 5. The path exists and is empty; nothing is invented here.
     leave_code = None
 
     if row.punch_count == 0:
         return Cell(employee_id, day, "", EMPTY, punch_count=0,
                     provisional=row.schedule_provisional,
-                    detail="no punch — a fact, not an absence (SPEC §3)")
+                    detail=leave_detail
+                    or "no punch — a fact, not an absence (SPEC §3)")
 
     time_format = marks.get("sheet.time_format", "%H:%M")
     outside: list[str] = []
@@ -175,6 +203,8 @@ def _cell_for(row: DailyAttendance | None, employee_id: int, day: dt.date,
         text, kind = marks.get("sheet.mark_on_schedule", "✓"), TICK
 
     detail = f"{row.punch_count} punches"
+    if leave_detail:
+        detail = f"{leave_detail}; {detail}"
     if row.manual_punch_count:
         detail += f", {row.manual_punch_count} entered by a person"
     if row.duplicate_pushes:
@@ -263,6 +293,7 @@ def render(session, start: dt.date, end: dt.date,
         ))
         day += dt.timedelta(days=1)
 
+    leave = leave_by_day(session, start, end)
     daily = {
         (row.employee_id, row.attendance_day): row
         for row in session.scalars(
@@ -275,7 +306,8 @@ def render(session, start: dt.date, end: dt.date,
     cells = {
         (row.employee_id, column.date): _cell_for(
             daily.get((row.employee_id, column.date)), row.employee_id,
-            column.date, marks)
+            column.date, marks,
+            leave=leave.get((row.employee_id, column.date)))
         for row in sheet_rows
         for column in columns
     }
@@ -287,10 +319,17 @@ def render(session, start: dt.date, end: dt.date,
         )
     if any(column.provisional_holiday for column in columns):
         notes.append("Some holidays on this calendar are provisional.")
-    notes.append(
-        "Leave codes are not entered yet — HR entry is step 5. No cell on this "
-        "sheet can hold one, and none is invented."
-    )
+    coded = sum(1 for cell in cells.values() if cell.leave_code)
+    uncoded = sum(1 for cell in cells.values()
+                  if not cell.leave_code and "leave record" in cell.detail)
+    if coded or uncoded:
+        note = f"{coded} day(s) of leave show a code"
+        if uncoded:
+            note += (f", and {uncoded} day(s) of leave show no letter because "
+                     "the record carries no sheet code — four form types have "
+                     "none (SPEC §6). Those cells show whatever the punches "
+                     "say")
+        notes.append(note + ".")
     if not any(cell.punch_count for cell in cells.values()):
         notes.append("No punches fell in this period for anyone on the sheet.")
 
@@ -313,15 +352,15 @@ def render(session, start: dt.date, end: dt.date,
 
 
 def legend_rows(session) -> list[tuple[str, str]]:
-    """The sheet's own marks, from rows.
+    """The sheet legend: the leave codes, and the sheet's own marks.
 
-    **The leave codes are not here yet.** HR's paper legend carries them (SPEC
-    §6) and §13 says a leave code is a row rather than a constant — so they
-    arrive as rows with leave entry, which is step 5. Printing them from this
-    file would be inventing a vocabulary that nothing can write into a cell.
+    **The codes come from `leave_code` rows**, not from this file — §13 says a
+    leave code is a row rather than a constant, and HR's paper legend is what
+    those rows were seeded from.
     """
     marks = settings(session)
-    return [
+    legend = [(row.code, row.label) for row in leave_codes(session)]
+    legend += [
         (marks.get("sheet.mark_on_schedule", "✓"), "punch on schedule"),
         ("08:20", "the actual punch time, when it is outside the schedule"),
         (marks.get("sheet.mark_manual", "*"),
@@ -329,6 +368,7 @@ def legend_rows(session) -> list[tuple[str, str]]:
         ("(blank)", "no punch — a fact, never an absence (SPEC §3)"),
         ("(shaded)", "rest day or a public holiday the factory closes for"),
     ]
+    return legend
 
 
 # ---- the screen ----------------------------------------------------------

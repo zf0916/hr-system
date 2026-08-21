@@ -38,7 +38,7 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 |**2**|**Employees** — number, name, section, role, group, active and left dates, device PIN|A real employee list loads|
 |**3**|**Schedule and calendar** — per group, effective-dated, plus holidays and rest days|A past period renders with the schedule that was in force then, not today's|
 |**4**|**Corrections** — guard entry and HR retroactive entry, both marked and counted|A guard entry cannot be given a time; an HR entry can|
-|**5**|**HR entry** — leave and gate pass, from the paper forms HR already receives|Codes appear on the generated sheet|
+|**5**|**HR entry** — leave and gate pass, from the paper forms HR already receives|Codes appear on the generated sheet — **built**|
 |**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it — **built; the rows exist and a total is a query away**|
 |**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7) — **built; leave codes wait on step 5**|
 |**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device — **the queue is built and carries REBOOT and CHECK; user push waits on the formats being real**|
@@ -77,6 +77,16 @@ What it produces across the 54 employees who have a PIN: two punches on most wor
 **Two fixtures, and a rule about PINs.** `fixtures/employees_sample.xlsx` is the shape of HR's list. `fixtures/employees_punch_demo.xlsx` is a demonstration list of 58 employees whose PINs match punches actually in the raw layer — `1` for the real device, `0090`/`0657`/`1627` and `0001`–`0050` for the simulator — so the sheet can be seen with data on it. Four of its employees have no Device ID at all, because an empty row is a real case.
 
 **A device PIN with a leading zero is refused on import** (SPEC §2). The device will not hold one (§10), so a mapping row carrying `0142` looks like a working link and silently is not — the employee's punches go unattributed with nothing on screen saying why. The sample fixture carried exactly that and now carries `142`. `--accept-leading-zero-pins` loads one deliberately, which is what the demonstration list needs, because the simulator sends shapes the hardware cannot. **The import report now names every employee's PIN outcome** — mapped, blank cell, or refused — since a count cannot tell a correctly skipped blank from a rejected value. The import gate proves both directions.
+
+**Step 5 is built.** `hr leave add` and `hr gatepass add` type what is on the two forms, and nothing else — no approval routed, no entitlement, no balance. The vocabularies are rows: seven ticks on the leave form, nine legend codes, four gate pass categories. **Three of the seven types carry a suggested sheet code and four carry none**, because the legend has no letter for them, and the screen offers nothing rather than the nearest guess (A48).
+
+**Two rules from the forms are structural, not advisory.** The number of days is required and **nothing in the code subtracts the two dates** — the gate reads the source to say so. The gate pass hours are a **generated column**: `INSERT ... hours` is refused by Postgres with `cannot insert a non-DEFAULT value into column "hours"`, which is the same shape as the guard entry that has no field for a time.
+
+**The sheet shows leave codes now**, and its legend prints them from `leave_code` rows. A leave day with no sheet code falls through to whatever the punches say rather than blanking a day somebody actually worked (A49), and the sheet counts both kinds in its notes.
+
+**Reloading the employee list stopped being free.** `--replace` deletes employees, and a leave record or gate pass hangs off one — so it is refused while any HR entry exists, and the list is corrected in place instead. Daily attendance is still cleared with the list, because that is rebuilt from punches; typed forms are not rebuildable from anything.
+
+`tools/hr_entry_gate.py` is 38 checks, and the import gate is 43. Broken on purpose: a record with no day count, a day count recomputed from the range, zero days, a record that says neither type nor code, typed hours, an in time before the out time, a category that is not one of the four, and a code sitting in a cell with no record behind it.
 
 **Step 8 is built, as far as it can be without the device.** `hr cmd send <serial> REBOOT|CHECK` queues one command; the device collects it on its next poll and reports the result back. `getrequest` hands out **one command per poll, oldest first, for that serial only**, and marks the hand-out in the same transaction as the request that took it — a command cannot leave without the request that collected it being on the record. **A device with nothing queued gets exactly the reply it got before this step**, byte for byte. `devicecmd` records the result against its command, and **a result for a command nobody issued is stored, flagged and still answered `OK`** — the same reflex as an unknown serial.
 
@@ -176,6 +186,14 @@ Run it:
     hr cmd list SIM0000000001
     */5 * * * * docker compose exec -T api hr alert check   # the transport
 
+    hr leave types
+    hr leave add --employee 9001 --type ANNUAL --from 2026-08-24 --to 2026-08-26 \
+        --days 3 --applied 2026-08-14 --by "HR: ..."
+    hr leave list --from 2026-08-01 --to 2026-08-31
+    hr gatepass add --employee 9001 --date 2026-08-19 --category PERSONAL \
+        --out 14:00 --in 16:30 --destination "..." --by "HR: ..."
+    hr gatepass list --from 2026-08-01 --to 2026-08-31
+
     hr sheet render --month 2026-08
     hr sheet export --month 2026-08 --out /tmp/attendance_2026-08.xlsx
     hr sheet detail --employee 0090 --from 2026-08-17 --to 2026-08-22 --punches
@@ -224,7 +242,7 @@ Every real punch in the capture now parses clean. `raw_request` 96, 109 and 129 
 
 Artifacts received and analysed: daily attendance sheet, late coming summary and deduction record, individual time-off record, time-off salary summary, SQL Account payroll entry screen, **leave card** — HR's per-employee leave ledger, kept by hand and not in the repo, since it carries a real employee's name and join date. What it settled is in SPEC §6 and §2.
 
-**Leave application form** — the two leave vocabularies, the form's own field order, and **five signature boxes** including the Operation Manager, SPEC §6. **Gate pass** — category, destination, out and in times, **four** signatures and no department at all, SPEC §5. **The two forms do not carry the same chain**, which SPEC §6 once said they did. Both were photographed blank, with no employee data on them, and **the photographs are not in the repo**: they are not source, and what they settled is in SPEC.
+**Leave application form** — the two leave vocabularies, the form's own field order, and **five signature boxes** including the Operation Manager, SPEC §6. **Gate pass** — category, destination, out and in times, **four** signatures and no department at all, SPEC §5. **The two forms do not carry the same chain.** Both were photographed blank, with no employee data on them, and **the photographs are not in the repo**: they are not source, and what they settled is in SPEC.
 
 **Most of the protocol contract is now observed, and the second capture is the one that is kept** — see SPEC.md §12, where each line says what was seen and what was not. The simulator still only tests that the receiver behaves as the contract says, not that the contract is right; what changed is that its shapes are now copied from real bytes rather than from documentation.
 

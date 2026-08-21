@@ -272,7 +272,7 @@ Either field on a leave record can therefore be empty: a form type with no code,
 
 **Five signature boxes on the leave form:** the applicant signs, the immediate supervisor verifies, the Head of Dept approves, and then the office-use block carries **Human Resource Dept with a date of its own** and **Operation Manager** beside it.
 
-**The two forms do not carry the same chain, and an earlier version of this section said they did.** The gate pass has **four** — applicant, supervisor, Head of Dept, HR (§5). The leave form has **five**, because the Operation Manager signs it and does not sign a gate pass. **Leaving the factory for an afternoon and taking leave are not authorised by the same people**, and a system that stored one chain for both would have to invent a signature or drop one.
+**The two forms do not carry the same chain.** The gate pass has **four** — applicant, supervisor, Head of Dept, HR (§5). The leave form has **five**, because the Operation Manager signs it and does not sign a gate pass. **Leaving the factory for an afternoon and taking leave are not authorised by the same people**, and a system that stored one chain for both would have to invent a signature or drop one.
 
 **Within each form the chain does not differ**: no leave type routes differently, and no gate pass category routes differently.
 
@@ -286,6 +286,12 @@ Either field on a leave record can therefore be empty: a form type with no code,
 - **The date of application is recorded, separately from the leave dates.** Both the leave card and the application form carry it: when leave was asked for and when it was taken are different facts, and the paper keeps both.
 - **The number of days is recorded as given, not computed from the range.** The card states it per line and the form has a field for it. A half day, and a non-working day inside a range, both mean the count and the span are not the same number — deriving one from the other would overwrite what HR wrote.
 - **Entitlement rules and balances are not designed, and neither is the approval workflow.** The chain is known (above); nothing routes it yet. Milestone 1 is entry only: employee, applied-for type, sheet code, date or range, number of days, date of application. The leave card's balance, entitlement, comments and remarks are marked for office use and stay out with them.
+
+**A leave record holds:** employee, applied-for type, sheet code, period from and to, the number of days as the form states it, the date of application, a reason where the form asks for one, the SQL Account code left empty, and who typed it. **It holds no balance, no entitlement and no signature** — the paper was signed before it reached HR, and recording who signed is Milestone 5.
+
+**Reloading the employee list never deletes what HR typed.** Daily attendance is cleared with the list because it is rebuilt from punches; **a leave record and a gate pass are forms somebody typed off paper and cannot be rebuilt from anything**, so a wholesale reload is refused while any exist and the list is corrected in place instead.
+
+**A gate pass record holds:** employee, date, one of the four categories, reason, destination, out time, in time, and who typed it. **The hours are generated from the two times by the database**, so there is no field to type them into — the same shape as the guard entry that has no field for a time (§3). **There is no department field**, because the form has none.
 
 ---
 
@@ -310,7 +316,7 @@ The Daily Workers Attendance sheet, in HR's existing layout.
 
 - **Generated output. Regenerated on demand. Never annotated by hand or edited in place.** A sheet HR writes on cannot be regenerated without losing what they wrote, and leaves that data invisible to everything downstream.
 - Everything on it comes from stored data: punches, corrections, leave, schedule, calendar.
-- A cell holds **a tick when the punch is on schedule, the actual punch time when it is outside schedule**, or a leave code.
+- A cell holds **a tick when the punch is on schedule, the actual punch time when it is outside schedule**, or a leave code. **The legend prints the codes from their rows**, so a code HR adds to the legend appears on the sheet without anything being edited.
 - Rest days and public holidays shade as whole columns.
 - Manual punches are marked.
 
@@ -367,10 +373,13 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A46|**A queued command is handed to the device as `C:{id}:{CMD}`, one per poll**, and the device acts on it. From the protocol document; no command has ever been sent to this device|
 |A47|**The device reports the result as `ID={id}&Return={code}&CMD={command}`**, with `Return=0` meaning success, posted to `/iclock/devicecmd`. Same document, same lack of evidence|
 |A48|**Leave entry offers a sheet code beside the applied-for type** — Annual Leave `AL`, Sick Leave `MC`, Unpaid Leave `UL` — as a convenience on the screen. The other four form types are offered no code, because the legend has none|
+|A49|**A day with leave shows its sheet code in the cell.** Where the record has no code, the cell shows what the punches say instead of a letter, and the day's fraction is not shown on the sheet at all|
 
 **Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 is isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
 
 **A21 — "the device pushes the PIN with leading zeros intact" — is answered and gone.** The question never arises: the device refuses to accept a leading zero in a user ID at all (§10). The mapping absorbed it with no code change, which is what §13's rule against resolving a PIN at capture was for.
+
+A49 is what a reader sees when leave and punches land on the same day. **A coded leave day is a leave cell**: nobody writes a punch time under an `AL`. **An uncoded leave day falls through to the punches**, because four form types have no letter and blanking the cell would hide a punch that really happened — the leave is still on the record and still in the per-day detail, and §6 forbids borrowing a letter from the type applied for. **The fraction is not on the sheet**: a half day shows its code like a full one, and what HR writes for a half day worked is not known.
 
 A48 is the only assumption on the leave entry screen, and it is a suggestion rather than a rule. **§6 settles that the applied-for type and the sheet code are two fields and that neither is derived from the other**, and four form types have no legend code at all — so this is what the screen fills in for HR before they touch it, not a mapping the system believes. **HR overrides it by typing something else, and the row records what they typed.** Three of the seven types happen to have an obvious code; the others are left empty and stay empty until somebody who writes the sheet says otherwise.
 

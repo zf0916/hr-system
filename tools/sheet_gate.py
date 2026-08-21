@@ -484,10 +484,11 @@ def main() -> int:
         build_days(session, MONTH_START, MONTH_END, [day.id])
         sheet = render(session, MONTH_START, MONTH_END)
         gate.check(all(cell.leave_code is None for cell in sheet.cells.values()),
-                   "no cell carries a leave code: entry is step 5")
-        gate.check(any("Leave codes are not entered yet" in note
-                       for note in sheet.notes),
-                   "and the sheet says so rather than leaving it to be noticed")
+                   "no cell carries a leave code, because no leave was entered "
+                   "for these employees — not because a cell cannot hold one")
+        gate.check(not any("not entered yet" in note for note in sheet.notes),
+                   "and the sheet no longer claims leave entry does not exist",
+                   f"notes {sheet.notes}")
         gate.check(not hasattr(sheet, "totals") and not hasattr(sheet, "period_total"),
                    "no totals on the sheet — a period total is a query over the "
                    "daily rows (SPEC §3)")
