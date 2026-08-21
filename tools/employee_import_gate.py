@@ -82,6 +82,7 @@ class Gate:
         self.failures: list[str] = []
         self.checks = 0
         self.last_staged: list = []
+        self.last_headers: dict = {}
 
     def check(self, ok: bool, what: str, detail: str = "") -> None:
         self.checks += 1
@@ -118,6 +119,7 @@ class Gate:
                 return [str(exc)], {}
             written = dict(result.written)
             self.last_staged = list(result.staged)
+            self.last_headers = dict(result.headers)
             messages = [f"{p.field}: {p.message}" for p in result.problems]
             session.rollback()
             return messages, written if not result.problems else {}
@@ -158,11 +160,27 @@ def main() -> int:
         gate.must_pass(work, "clean fixture loads", 8)
 
         print("\n-- a mapping pointing at the wrong column")
-        gate.must_fail(
-            work, "employee_number pointed at the running-number column",
-            "expected shape",
-            columns={"employee_number": "A"},
-        )
+        # This used to be caught by the shape: a running number 1..8 is not
+        # four digits. It is not caught that way any more, because HR's paper
+        # writes real numbers short and `090` has to load (SPEC §2). **What
+        # shows it is the header echo**, which is why the importer reads the
+        # header row at all — it never matches on it, it prints it back.
+        written = gate.must_pass(
+            work, "employee_number pointed at the running-number column loads",
+            8, columns={"employee_number": "A"})
+        if written:
+            header = gate.last_headers.get("employee_number")
+            gate.check(header not in (None, "Emp No."),
+                       "and the report says which column it read: "
+                       f"employee_number <- {header!r}, not the number column",
+                       f"headers {gate.last_headers}")
+            numbers = [row.employee_number for row in gate.last_staged]
+            gate.check(numbers == [str(i) for i in range(1, 9)],
+                       f"the numbers it loaded are the running numbers: {numbers}")
+            gate.check(all(row.number_from_numeric_cell
+                           for row in gate.last_staged),
+                       "and every one came from a numeric cell, which the "
+                       "report also says")
         gate.must_fail(
             work, "employee_number pointed at the name column", "expected shape",
             columns={"employee_number": "D", "name": "B"},
@@ -199,8 +217,12 @@ def main() -> int:
             edits=[(8, 10, "01/01/2019")],
         )
         gate.must_fail(
-            work, "a number that is not four digits", "expected shape",
-            edits=[(5, 2, "090")],
+            work, "a number that cannot be keyed to four", "expected shape",
+            edits=[(5, 2, "16011")],
+        )
+        gate.must_fail(
+            work, "a number that is not digits", "expected shape",
+            edits=[(5, 2, "A090")],
         )
         gate.must_fail(
             work, "one PIN on two employees", "cannot belong to two employees",
@@ -259,14 +281,33 @@ def main() -> int:
             flags=("no-replace",), preload=True,
         )
 
+        print("\n-- a number written short is ordinary, not odd (SPEC §2)")
+        # HR's own paper prints `090` and `1601` on one page. A three-digit
+        # number is the same number written short, so it loads with no flag and
+        # keys to four.
+        written = gate.must_pass(
+            work, "a three-digit number loads with no flag", 8,
+            edits=[(5, 2, "090")],
+        )
+        if written:
+            staged = {row.employee_number: row for row in gate.last_staged}
+            gate.check("090" in staged and staged["090"].number_key == "0090",
+                       "stored verbatim as '090', keyed as '0090'",
+                       f"got {[(n, r.number_key) for n, r in staged.items()][:3]}")
+            gate.check(not staged["090"].odd_number,
+                       "and it is not flagged odd — nothing had to be accepted")
+
+        gate.must_pass(work, "so does a two-digit one", 8, edits=[(5, 2, "90")])
+
         print("\n-- what an odd number does when it is accepted deliberately")
         written = gate.must_pass(
-            work, "--accept-odd-numbers loads it", 8,
-            edits=[(5, 2, "090")],
+            work, "--accept-odd-numbers loads a five-digit number", 8,
+            edits=[(5, 2, "16011")],
             flags=("accept-odd-numbers",),
         )
         if written:
-            print("           stored verbatim, matched on the padded key")
+            print("           stored verbatim, and its key is the number itself "
+                  "— five digits cannot pad to four")
 
     print("\n-- a device PIN the hardware cannot hold (SPEC §2, §10)")
     with tempfile.TemporaryDirectory() as directory:

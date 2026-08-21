@@ -83,10 +83,19 @@ ROLES = [
 # unanswered, so the shape it is expected to take and the way its matching key
 # is built are both rows. Employee groups are deliberately absent: which groups
 # exist is parked too, and the first real list is what defines them.
+# SPEC §2. The employee number is four digits, zero-padded, and that is
+# confirmed rather than assumed — but **HR's paper writes it short**: the late
+# coming record prints `090` and `1601` on the same page. A list writing a
+# number short is not a typo and must not stop an import; it is stored as
+# written and keyed to four. What stops an import is a number that cannot be
+# keyed to four at all — more than four digits, or something that is not
+# digits — and only until somebody accepts it deliberately.
 EMPLOYEE_NUMBER_RULE = [
-    ("expected_shape", "^[0-9]{4}$", "A29 — anything else stops the import and has to be accepted deliberately"),
-    ("key_width", "4", "A28 — the matching key is padded to this width"),
-    ("key_pad", "0", "A28 — padded with this character, on the left"),
+    ("expected_shape", "^[0-9]{1,4}$",
+     "one to four digits: `090` and `1601` are both ordinary, and both key to "
+     "four. Anything else stops the import and has to be accepted deliberately"),
+    ("key_width", "4", "the matching key is padded to this width (SPEC §2)"),
+    ("key_pad", "0", "padded with this character, on the left (SPEC §2)"),
 ]
 
 

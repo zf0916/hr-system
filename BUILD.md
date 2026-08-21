@@ -38,7 +38,7 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 |**2**|**Employees** — number, name, section, role, group, active and left dates, device PIN|A real employee list loads|
 |**3**|**Schedule and calendar** — per group, effective-dated, plus holidays and rest days|A past period renders with the schedule that was in force then, not today's|
 |**4**|**Corrections** — guard entry and HR retroactive entry, both marked and counted|A guard entry cannot be given a time; an HR entry can|
-|**5**|**HR entry** — leave, gate pass, treatment slip, from the paper forms HR already receives|Codes appear on the generated sheet|
+|**5**|**HR entry** — leave and gate pass, from the paper forms HR already receives|Codes appear on the generated sheet|
 |**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it — **built; the rows exist and a total is a query away**|
 |**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7) — **built; leave codes wait on step 5**|
 |**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device — **the queue is built and carries REBOOT and CHECK; user push waits on the formats being real**|
@@ -65,6 +65,10 @@ Deliberately not in step 2: no employee screen, no push to the device, no leave,
 **Every schedule and every holiday now in the database is marked provisional.** The 2026 list is still parked. `fixtures/holidays_provisional_2026.xlsx` carries only holidays whose dates are fixed by the calendar — Hari Raya, Chinese New Year, Deepavali, Wesak and Thaipusam are deliberately absent, because a plausible wrong date is worse than a missing one.
 
 Deliberately not in step 3: no late minutes, no daily attendance, no sheet.
+
+**Two more artifacts read, and four assumptions retired.** The individual time-off record settles its own shape — seven ruled lines of date, reason out, from, to, hours, then a total and the employee's signature, with the reason column holding the gate pass category (`PERSONAL` on the specimen). The late coming record settles two things by printing them: its period, `16/12/2025` to `15/01/2026` (A8), and an employee at exactly `0 hours 30 minutes` on the deduction list (A11). **A28 and A29 go too** — four digits zero-padded, keyed to four, numbers reaching about 1500 — and they are now §2's rules rather than §9's guesses.
+
+**The importer used to halt on `090`, and that was wrong.** HR's own paper prints `090` and `1601` on one page, so a number written short is the same number, not a typo: the shape row is `^[0-9]{1,4}$`, `090` loads with no flag and keys to `0090`, and what still halts is a number that cannot be keyed to four — five digits, or something that is not digits. **The cost is a safety net**: a mapping pointed at the running-number column used to fail on the shape and now loads. The header echo is what shows it, which is why the importer prints the header text it never matches on.
 
 **A month of punches, so the sheet can be read.** `tools/make_month_fixture.py` posts a plausible August at the receiver — **the same `/iclock/cdata` route, the same ten-field ATTLOG line, chunked 20 to a push as A34 reads the device's own limit.** Nothing about it is a second code path: the raw layer stores it, the parser reads it, `hr attendance build` derives the rows, and the sheet renders them. It is deterministic on its seed, it adds to whatever is already captured, and **it writes no leave** — step 5 does not exist and no cell can hold a code.
 
@@ -356,11 +360,10 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**Scheduled start and end per group. Read it off the punch card machine before it is decommissioned** — it prints red for out-of-schedule punches, so the schedule is already configured on it|HR / the machine|Late coming|
 |Is there a grace period before a minute counts as late|HR, then management|Late coming|
 |Is lateness measured against a fixed start, or the shift the employee was on that day? Do employees move between shifts?|HR|Late coming|
-|**Which period does each item actually run on** — are the 10th/15th/20th cut-offs deadlines or period boundaries? **One sheet covers one calendar month is the assumption** (SPEC §9 A40)|HR|All aggregation, and the sheet's period|
+|**Which period does the time-off record and the payroll half actually run on** (SPEC §9 A9, A10)? **Late coming is answered** — the record states 16/12/2025 to 15/01/2026 — but the time-off record's period is blank on the specimen. Are the 10th/15th/20th cut-offs deadlines or boundaries? **One sheet covers one calendar month is the assumption** (A40)|HR|Time-off aggregation, and the sheet's period|
 |Is the 30-minute threshold applied per month or per payroll half?|HR|Milestone 3|
 |What exactly does `AB — absent cut 3 times` cut, and against what?|HR|Milestone 3|
-|Is the employee number always 4 digits, and **what is the PIN for an employee whose number starts with a zero** — the device refuses to store one (SPEC §10)|HR|Enrollment|
-|**When a number in the list is not four digits, is it a typo, an older format, or a different scheme?** (SPEC §9 A28, A29). Until answered the importer refuses it and has to be told to accept it|HR|The employee list|
+|**What is the PIN for an employee whose number starts with a zero?** The device refuses to store one (SPEC §10), so `0090` is enrolled as some other string and the mapping joins them. Which string HR actually keys is not on any paper yet|HR|Enrollment|
 |Are numbers reused after someone leaves?|HR|Employees|
 |What employee groups exist, and does the group decide shift and break?|HR|Schedule|
 |Half-day marks — which leave types can be half days?|HR|Leave|
@@ -408,9 +411,9 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 
 **Artifacts still wanted**
 
-Medical treatment slip · **one closed month of attendance sheet with the matching SQL Account entries** — that second one lets the whole chain be reconciled end to end before anything is built.
+**One closed month of attendance sheet with the matching SQL Account entries** — it lets the whole chain be reconciled end to end before anything is built.
 
-**The gate pass does not tick off the treatment slip.** Its Medical Treatment tick is the exit authorisation and not the treatment record (SPEC §5), and the slips are counted separately — up to five per employee per month on the summary. The slip is the last form outstanding.
+**The medical treatment slip does not exist and is off this list.** HR confirms the only attendance forms are the leave application and the gate pass, and the individual time-off record — seven ruled rows — says nothing about slips. `Medical Treatment` on the gate pass is one of four category ticks and nothing more (SPEC §5). **Step 5 is no longer waiting on a form.**
 
 The punch card itself is not needed. Its only unique content is the leave codes HR writes on it, and those already appear on the sheet.
 

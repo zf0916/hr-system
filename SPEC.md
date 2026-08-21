@@ -27,7 +27,7 @@ Today both HR and Accounts read the same punch card, at different times and at d
 
 |Attribute|Notes|
 |---|---|
-|Employee number|**4 digits, zero-padded** — `0090`, `0657`, `1627`. Forms writing `090` are padded on entry. The padded form is authoritative|
+|Employee number|**Four digits, zero-padded** — `0090`, `0657`, `1627`. Stored exactly as the source wrote it; **the padding happens in the matching key, never on write** (below)|
 |Name||
 |Section|A column on the attendance sheet — PACK ASSY, QC, MAINT, PROJECT DOOR, WAREHOUSE and others|
 |Role|Row colour on the sheet — Management/Office, Production Assistant, HOD/Supervisor, QA/QC, Assistant Supervisor, Charge Hand|
@@ -36,7 +36,9 @@ Today both HR and Accounts read the same punch card, at different times and at d
 |Device PIN|The device's own user identifier|
 
 - **`EMP-1001` is not used and never was.** The number Accounts and HR already print on every document wins.
-- **The employee number is stored exactly as given, with no padding applied on write.** A separate matching key handles the padding, so a wrong assumption about the format is corrected by remapping rows rather than by a schema change.
+- **The employee number is stored exactly as given, with no padding applied on write, and the matching key is that number padded on the left to four characters with zeros.** Those are one rule with two halves, and they are the reason a number written short on paper still finds its employee: `090` is stored `090` and keyed `0090`, which is the same key as `0090` stored in full.
+- **A wrong column is caught by the header echo, not by the number's shape.** Accepting `090` means accepting a running number `1` too, so a mapping pointed at the wrong column loads instead of halting. The importer reads the header row only to print it back — `employee_number <- 'S/N'` rather than `'Emp No.'` — and says how many numbers came from numeric cells. **That echo is the check now**, and it is why the importer never matches on header text but always shows it.
+- **Four digits, zero-padded, is confirmed rather than assumed** — and the numbers in use have reached about 1500. **Real HR paper prints both forms on one page**: the late coming record carries `090` and `1601` together. So a list writing a number short is not a typo and does not stop an import; it is keyed to four and matched like any other. **What stops an import is a number that cannot be keyed to four** — more than four digits, or something that is not digits at all — and only until somebody accepts it deliberately.
 - **A device PIN is not an employee number.** It is stored as a string, exactly as the device sends it, with no lookup at capture time.
 - **The device refuses a leading zero in a user ID** (§10, observed). So a PIN can never be `0090`, and the padded employee number is not usable as a PIN as it stands. The dated device-user mapping is what joins the two, which is why this costs nothing: it is rows, not a format to agree on.
 - **A PIN with a leading zero is refused on import, and loaded only when somebody says so deliberately.** A list that gives an employee `0142` as a Device ID is describing a PIN the device cannot hold, so the mapping row would never match a punch — **it would look like a working link and silently not be one**, and the employee's punches would go unattributed with nothing on screen to say why. The importer refuses it, names the employee and the value, and `--accept-leading-zero-pins` loads it anyway for a list belonging to another device or a firmware where §10's observation does not hold.
@@ -50,7 +52,7 @@ Today both HR and Accounts read the same punch card, at different times and at d
 
 ## 3. Attendance capture
 
-**The device records punches and nothing else.** It cannot record leave, gate pass or treatment slips. Those have their own entry paths and are never inferred from punch data.
+**The device records punches and nothing else.** It cannot record leave or a gate pass. Those have their own entry paths and are never inferred from punch data.
 
 **Three layers, each rebuildable from the one above:**
 
@@ -145,7 +147,7 @@ Public holidays and rest days shade whole columns on the sheet, driven by the ca
 ### Late coming
 
 - Late minutes accumulate across the period.
-- **Threshold: 30 minutes or more accumulated is deducted from salary.** Below 30 is exempt. Verified — an employee at exactly 30 minutes was deducted.
+- **Threshold: 30 minutes or more accumulated is deducted from salary. Confirmed, and inclusive:** an employee at exactly `0 hours 30 minutes` appears on the deduction list. Below 30 is exempt.
 - In force since July 2012 salary.
 - Produced as two documents: a per-half working summary, then a combined record signed by HR/Admin and Acct/Payroll.
 - Enters SQL Account as the `Lateness` hours field.
@@ -165,20 +167,35 @@ The gate pass carries: employee name, staff number, department, date, a category
 
 - **Hours are not written on the gate pass.** Out time and in time are, and the hours are computed from the pair. This is the reverse of leave, where the number of days is written on the form and is stored as given, never recomputed (§6).
 - **The out and in times are the guard's on paper and HR's in the system.** The guard fills them in at the gate on the paper form; HR types both when the form is entered. **This is not the guard entry path in §3** — that path corrects a failed biometric punch, is server-stamped, and has no field for a typed time. Two different acts: a gate pass time is HR transcribing an authorised absence off paper, a guard entry is a punch standing in for one the device did not take.
-- **Medical Treatment on the gate pass is the exit authorisation, not the treatment record.** It does not replace the medical treatment slip, and the two are not one entry.
-- **The summary combines gate pass hours and medical treatment slip hours into one total per employee.**
+- **The summary totals gate pass hours per employee**, and nothing else feeds it.
 - Same 30-minute threshold, deducted from the next due salary.
-- Up to 5 treatment slips per employee per month appear on the summary.
+
+### The individual time-off record
+
+One per employee per period, from the real form. **Seven ruled lines**, and a line carries:
+
+|Field|Notes|
+|---|---|
+|Date||
+|Reason out|**The gate pass category** — the specimen reads `PERSONAL` (§5, the four ticks)|
+|From, to|The out and in times off the gate pass|
+|Hours|Computed from the pair, as on the gate pass|
+
+Under the lines: **a total of hours taken, and the employee's signature.**
+
+**There is no medical treatment slip.** HR confirms the only attendance forms are the leave application and the gate pass, and this record — seven ruled rows — says nothing about slips. **`Medical Treatment` on the gate pass is one of four category ticks and nothing else**: it is why somebody left the premises, not a second document with its own count.
 
 ### Periods currently in use, which do not align
 
 |Item|Period|
 |---|---|
-|Late coming|16th → 15th|
+|Late coming|16th → 15th — **confirmed: the record states its own period, 16/12/2025 to 15/01/2026**|
 |Gate pass / time off|1st → month end|
 |Payroll entry|Half-month, 1–15 and 16–end|
 
-Cut-offs stated on the sheet: time off and late coming close on the 10th, salary and OT on the 15th, annual leave forms on the 20th. **Whether these are data periods or submission deadlines is unconfirmed.**
+**The late coming period is settled and the other two are not.** The time-off record's period is blank on the specimen, and the payroll halves come from the entry screen rather than from a period anybody has stated.
+
+Cut-offs stated on the sheet: time off and late coming close on the 10th, salary and OT on the 15th, annual leave forms on the 20th. **Whether these are data periods or submission deadlines is unconfirmed** — and the late coming record's own header shows the 16th → 15th period running alongside a 10th cut-off, so at least there the cut-off is a deadline and not a boundary.
 
 ---
 
@@ -295,19 +312,15 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A1–A2|Day shift 08:00–17:30|
 |A4|Grace period 0 minutes|
 |A7|Work hours = time present minus break|
-|A8|Late coming period runs 16th → 15th|
 |A9|Time off period runs 1st → month end|
 |A10|Payroll halves are 1–15 and 16–end|
-|A11|Late deduction threshold ≥30 min, inclusive|
 |A12|Threshold applies to the combined 16→15 total|
-|A13|Time off threshold ≥30 min, gate pass and slips combined|
+|A13|Time off threshold ≥30 min, over gate pass hours — there is nothing else to combine them with (§5)|
 |A14|Leave codes AL, MC, EL, UL, PH, AB, SS — the sheet legend, now known to be an incomplete list: four form types have no code at all (§6)|
 |A15|Half day stored as 0.5|
 |A19|Device PIN equals the employee number — **it cannot be the padded form: the device refuses a leading zero (§10), so a padded number and its PIN differ by that zero**|
 |A25|The guard can reach the application where failures happen|
 |A27|An ATTLOG body decodes as UTF-8, else GBK, else Latin-1. Still open after two captures: every byte in both was ASCII, and `Name` was empty in both|
-|A28|An employee number's matching key is the number padded on the left to 4 characters with zeros|
-|A29|An employee number is exactly 4 digits; anything else stops an import until it is accepted deliberately|
 |A30|A punch belongs to an attendance day if it falls within 240 minutes before that day's shift start or 240 minutes after its end|
 |A31|Which group runs which shift — DAY-PROD day, NIGHT-PROD night, OFFICE day with the office break|
 |A32|The site's timezone is Asia/Kuala_Lumpur, and a guard entry's server stamp is read as a local punch time through it. **The device's offset is observed at exactly +8** (§12), which is what that zone produces and what `TimeZone=8` told it|
@@ -349,7 +362,9 @@ A32 and A33 are what turn a correction and a device punch into rows about the sa
 
 A30 is the width of the attendance-day window, and it is per schedule row. It is a guess until real punches show how early people arrive and how late they leave. A31 is provisional in the strongest sense: the group codes came from a sample list, not from HR, and every seeded schedule is marked provisional in the database.
 
-A28 and A29 are the employee number's shape and its key. §2 settles that the stored number is never padded or stripped and that a separate key does the matching; it does not settle what a number may look like, and BUILD.md parks that question. Both are rows, so correcting them is an UPDATE and a rekey — no stored number is touched.
+**Four are gone, answered by HR's own paper.** A8 — the late coming period — is printed on the record itself, `16/12/2025` to `15/01/2026`. A11 — the 30-minute threshold, inclusive — is on the deduction list, where an employee at exactly `0 hours 30 minutes` appears. **A28 and A29, the employee number's key and its shape, are now §2's rules rather than guesses**: four digits zero-padded, keyed to four, numbers reaching about 1500, and both `090` and `1601` printed on one page of real paper. They are still rows — `employee_number_rule` still holds the shape and the key width, so a later correction is still an UPDATE and a rekey — but nothing is being assumed by holding them.
+
+**A9 and A10 stay.** The time-off record's period is blank on the specimen, and the payroll halves come from the entry screen rather than from a period anybody has stated.
 
 **A26 is answered and gone.** It was what *we* send the device in the handshake reply. The receiver sent all ten option lines, the device accepted them without complaint and carried on pushing, and §12 now records the set as observed. The rows did not change; what changed is that they are no longer a guess.
 
