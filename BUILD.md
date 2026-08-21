@@ -42,7 +42,7 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 |**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it — **built; the rows exist and a total is a query away**|
 |**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7) — **built; leave codes appear, and the browser draws the same render**|
 |**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device — **the queue is built and carries REBOOT and CHECK; user push waits on the formats being real**|
-|**10**|**The screen** — the HR interface and the guard's one screen, in seven pieces|Each piece has its own gate; **pieces 1 to 4 are built** — the serving shape, the read-only screens, the guard screen, leave entry|
+|**10**|**The screen** — the HR interface and the guard's one screen, in seven pieces|Each piece has its own gate; **pieces 1 to 5 are built** — the serving shape, the read-only screens, the guard screen, leave entry, gate pass entry|
 |**9**|**Ingestion alert** — warns when punches stop arriving|Silence for N hours raises a warning — **built; contact silence and punch silence are separate, both rows**|
 
 **Then: demo to HR, walking the assumed values line by line while the software is on screen.**
@@ -85,7 +85,27 @@ What it produces across the 54 employees who have a PIN: two punches on most wor
 
 `tools/serving_gate.py` is 31 checks, and it asks both ports the way a device and a browser would. Broken on purpose, two ways: **mounting the receiver into the HR app and removing the refusal** put a live handshake on the tunnel's port — `GET OPTION FROM: GATE` — and six checks failed; **mounting it while leaving the refusal in front of it** answers `404` correctly and is still caught, because the interface must not so much as import the receiver. An app that imports it is one reordering away from serving it.
 
-The seven pieces, in order: **1 serving shape** · **2 read-only screens** · **3 the guard screen** · **4 leave entry** · 5 gate pass entry · 6 HR corrections · 7 the demo pass.
+The seven pieces, in order: **1 serving shape** · **2 read-only screens** · **3 the guard screen** · **4 leave entry** · **5 gate pass entry** · 6 HR corrections · 7 the demo pass.
+
+**Step 10, piece 5 is built: gate pass entry.** One page at `/gatepass`. **HR types a pass that has already been signed on paper** (SPEC §5), out and in times included, through `hr_entry.record_gate_pass` — the same function `hr gatepass add` calls.
+
+**The fields are in §5's order**: name / no. pekerja, emp no. as a field of its own, date, out time, in time, one tick of four, reason, destination. The order is stated by the server and the page is checked against it, not against its own source.
+
+**No hours, at four depths, and the reverse rule from leave.** Nothing on the page to type them into, no field in the payload, no parameter on either service function, and a generated column underneath that refuses an `INSERT` naming it. They appear once the pass is saved, read back from what the database stored — `14:00` to `16:30` comes back as `2.50`. **Leave is the opposite**: there the number of days is typed and nothing may recompute it. Two forms, two opposite rules, and both enforced rather than trusted.
+
+**No department, because the form has none.** The employee's section is looked up and shown beside the name, marked *looked up — not on this form*, and the record has no column for one. That is the difference from §6's leave form, which has a Department line and shows it as field three.
+
+**The two times are HR's, and the screen says whose they are not.** Beside the boxes: *This is not the guard entry screen. That one stands in for a punch the device did not take, is stamped by the server, and has no field for a time at all.* The two acts look alike from a distance and only one of them has time boxes — that is the whole reason the sentence is there rather than in a comment.
+
+**The four signatures** — applicant, supervisor, Head of Dept, HR — are listed under *Not on this screen*, one fewer than the leave form's five, because the Operation Manager does not sign a gate pass.
+
+**Who types it moved out of the leave screen.** `typists` and `typist` now live in `app/hr_entry.py`, the module both forms write through, rather than in `app/leave_entry.py` — a second entry screen reaching into the first one's module to find the two people at the keyboard would make the leave screen a dependency of everything typed afterwards.
+
+**`hr gatepass list` gained an `entered by` column.** `hr leave list` had one and this did not, so the CLI could show a pass without showing who typed it — harder to check than the paper it came from.
+
+**`tools/gate_pass_gate.py` is 87 checks**, and it presses the page: choose the typist, type the number, fill the date and both times, press *Personal*, type a reason and destination, press *Save*, and read `2.50` back. It also reads **every control on the page at three moments** — blank, filled, and after saving — so an hours box called anything at all fails. Broken on purpose, five ways: **swapping emp no. and date** failed the order check; **an hours field added at every depth at once** failed ten checks and was still refused at the bottom by the generated column; **a department field** failed nine; **accepting an in time not after the out time** failed four and turned two refusals into `500`s; **an unknown tick falling back to `OTHERS`** accepted a fifth category three times over.
+
+**A leave record on the working database is not this session's, and is left alone.** `leave_record` **236** — employee `0090`, ANNUAL, sheet code `AL`, 2026-08-22 to 2026-08-26, 5.00 days, typed by Aisyah, `2026-08-21 22:57:55` local, note *typed on the leave entry screen*. Nothing here produces that shape: this session's gates write only to a throwaway database, and the one break that escaped onto this one wrote 157–159 at 22:16 with different dates, a different count and no sheet code. The note means it came through the screen or its service function, not the CLI. **Somebody used the screen**, which is what the screen is for — the interface is on the LAN. It is recorded here rather than deleted, and rather than counted as an artefact.
 
 **Step 10, piece 4 is built: leave entry.** One page at `/leave`, on the HR interface's own chrome. **HR types a form that has already been signed on paper** (SPEC §6) and the screen computes nothing that ends up on the row: it writes through `hr_entry.record_leave`, the same function `hr leave add` calls.
 
@@ -139,7 +159,7 @@ The confirm step lives at `/guard?employee=0090`, which means the phone's Back b
 
 **The grid freezes its edges the way the file does.** The three identifying columns stay put while the days scroll, the day-number and weekday rows stay put while the employees scroll, and the grid scrolls inside a bounded box so the horizontal scrollbar is reachable without passing 58 rows first — the screen's answer to the file's freeze panes and repeating print titles. Each day column is as wide as the widest thing in it, which is the rule `to_text` already followed. **Shading was a header-only stripe and is now the whole column**, cells included, as `to_excel` fills it.
 
-**`tools/screens_gate.py` is 106 checks**, and it reads the page out of a real browser — Chromium's own `--dump-dom` inside the Playwright image, no driver package and nothing installed at run time. Broken on purpose, four ways: **the browser truncating a two-time cell** to its first half changed ten cells and was caught only by the DOM check, which is the whole reason that check exists; **dropping the deterministic write** made two exports differ and the download stop matching; **a loop and an import added to a route handler** failed the import check and the AST check together; **widening the fixture-serial pattern** to `^(GATE|TEST|CHECK|NOT|PYA)` made the real device look like a fixture and failed on its serial by name.
+**`tools/screens_gate.py` is 109 checks**, and it reads the page out of a real browser — Chromium's own `--dump-dom` inside the Playwright image, no driver package and nothing installed at run time. Broken on purpose, four ways: **the browser truncating a two-time cell** to its first half changed ten cells and was caught only by the DOM check, which is the whole reason that check exists; **dropping the deterministic write** made two exports differ and the download stop matching; **a loop and an import added to a route handler** failed the import check and the AST check together; **widening the fixture-serial pattern** to `^(GATE|TEST|CHECK|NOT|PYA)` made the real device look like a fixture and failed on its serial by name.
 
 **One of those breaks passed the first time and should not have.** The rebuilt image had not reached the container, so the gate read the old page and agreed with it. The bundle is now checked for the change before the failure is believed — a gate proven against a stale artefact proves nothing.
 
@@ -277,7 +297,7 @@ Run it:
     http://<server>:8090/            # employees, on a date
     http://<server>:8090/sheet?month=2026-08
     http://<server>:8090/employee/0090?month=2026-08
-    uv run python tools/screens_gate.py        # 106 checks; reads the real DOM
+    uv run python tools/screens_gate.py        # 109 checks; reads the real DOM
     uv run python tools/screens_gate.py --no-dom   # without Docker
 
     http://<server>:8090/leave              # leave entry, off the paper form
@@ -286,6 +306,11 @@ Run it:
     uv run python tools/leave_entry_gate.py --no-dom   # without the browser
     uv run python tools/throwaway.py        # the same interface, on a database
                                             #   that is dropped when it exits
+
+    http://<server>:8090/gatepass           # gate pass entry, off the paper form
+    uv run python tools/gate_pass_gate.py      # 87 checks; presses the page,
+                                               #   and saves on a throwaway
+    uv run python tools/gate_pass_gate.py --no-dom     # without the browser
 
     hr alert fixtures                          # what the unwatched list omits
 

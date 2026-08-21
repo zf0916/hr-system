@@ -37,7 +37,13 @@ from app.models import (
     LeaveCode,
     LeaveRecord,
     LeaveType,
+    ScreenUser,
 )
+
+# Who is at the keyboard on an HR entry screen. The other value is 'guard',
+# which is a different person in a different place doing a different thing
+# (SPEC §3).
+HR = "hr"
 
 
 @dataclass
@@ -64,6 +70,35 @@ def leave_codes(session) -> list[LeaveCode]:
 def categories(session) -> list[GatePassCategory]:
     return list(session.scalars(
         select(GatePassCategory).order_by(GatePassCategory.sort_order)))
+
+
+def typists(session) -> list[ScreenUser]:
+    """Who may be typing a form. **Rows, and attribution rather than a login**
+    — the same table the guard screen picks from, HR's side of it (SPEC §3).
+
+    It lives here rather than on either entry screen because both write through
+    this module: leave and gate passes are typed by the same two people, and a
+    second screen reaching into the first one's module to find them would make
+    the leave screen a dependency of everything typed afterwards.
+    """
+    return list(session.scalars(
+        select(ScreenUser)
+        .where(ScreenUser.screen == HR, ScreenUser.active.is_(True))
+        .order_by(ScreenUser.sort_order, ScreenUser.code)
+    ))
+
+
+def typist(session, code: str) -> ScreenUser:
+    """One of them, by code. An unknown code is refused: every form records who
+    typed it (SPEC §5, §6)."""
+    row = session.get(ScreenUser, (code or "").strip())
+    if row is None or row.screen != HR or not row.active:
+        allowed = [user.code for user in typists(session)]
+        raise ValueError(
+            f"{code!r} is not somebody on the HR list. A form records who "
+            f"typed it (SPEC §5, §6). On the list: {allowed}"
+        )
+    return row
 
 
 def suggested_code(session, type_code: str | None) -> str | None:

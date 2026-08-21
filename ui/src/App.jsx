@@ -1,10 +1,10 @@
 // The HR interface's screens, and the guard's.
 //
 // Piece 2's three read-only screens and the download, piece 3's guard screen,
-// piece 4's leave entry. Every one of them is a face on a function that
-// already exists. **The read-only screens still write nothing**; entry arrives
-// one screen at a time, each with the record it writes — gate passes and HR
-// corrections are pieces 5 and 6.
+// piece 4's leave entry, piece 5's gate pass entry. Every one of them is a
+// face on a function that already exists. **The read-only screens still write
+// nothing**; entry arrives one screen at a time, each with the record it
+// writes — HR corrections are piece 6.
 //
 // Routing is done here rather than by a library: a handful of paths do not
 // need a dependency, and the server already falls back to this page for any path that
@@ -16,6 +16,7 @@ import Sheet from './screens/Sheet.jsx'
 import Detail from './screens/Detail.jsx'
 import Guard from './screens/Guard.jsx'
 import LeaveEntry from './screens/LeaveEntry.jsx'
+import GatePassEntry from './screens/GatePassEntry.jsx'
 
 function useRoute() {
   const [route, setRoute] = useState(() => window.location.pathname + window.location.search)
@@ -68,6 +69,8 @@ export default function App() {
   let screen
   if (path === '/leave') {
     screen = <LeaveEntry go={go} />
+  } else if (path === '/gatepass') {
+    screen = <GatePassEntry go={go} />
   } else if (path === '/sheet') {
     screen = <Sheet search={search} go={go} />
   } else if (path.startsWith('/employee/')) {
@@ -91,10 +94,13 @@ export default function App() {
             <NavLink to="/leave" current={route} go={go}>
               Leave entry
             </NavLink>
+            <NavLink to="/gatepass" current={route} go={go}>
+              Gate pass entry
+            </NavLink>
           </nav>
           <span className="ml-auto text-xs text-slate-400">
-            {path === '/leave'
-              ? 'leave entry writes what HR types off a signed form'
+            {path === '/leave' || path === '/gatepass'
+              ? 'this screen writes what HR types off a signed form'
               : 'read only — nothing on these screens writes anything'}
           </span>
         </div>

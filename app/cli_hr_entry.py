@@ -156,15 +156,19 @@ def cmd_gatepass_list(args) -> int:
         if not rows:
             print(f"no gate pass recorded over {start} → {end}")
             return 0
+        # **Who typed it is a column**, as it is on `hr leave list`. A form
+        # records who entered it (SPEC §5) and a listing that leaves that out
+        # makes the record harder to check than the paper it came from.
         print(f"{'id':>5}  {'employee':<9}{'date':<12}{'out':<7}{'in':<7}"
-              f"{'hours':>6}  {'category':<18}destination")
+              f"{'hours':>6}  {'category':<18}{'entered by':<12}destination")
         total = 0.0
         for row in rows:
             total += float(row.hours or 0)
             print(f"{row.id:>5}  {numbers.get(row.employee_id, '?'):<9}"
                   f"{str(row.pass_date):<12}{str(row.out_time)[:5]:<7}"
                   f"{str(row.in_time)[:5]:<7}{row.hours:>6}  "
-                  f"{row.category_code:<18}{row.destination or ''}")
+                  f"{row.category_code:<18}{row.entered_by:<12}"
+                  f"{row.destination or ''}")
         print(f"\n{len(rows)} pass(es), {total:.2f} hours — every one of them "
               "derived from its two times (SPEC §5)")
     return 0

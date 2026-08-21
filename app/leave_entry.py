@@ -7,9 +7,10 @@ row.
 
 Four functions, and only the last one writes:
 
-  * `screen` — who is at the keyboard, the seven ticks on the form, the nine
-    legend codes, and the order the paper puts its fields in. All rows except
-    the order, which is §6's own layout.
+  * `screen` — who is at the keyboard (`hr_entry.typists`, shared with the gate
+    pass screen), the seven ticks on the form, the nine legend codes, and the
+    order the paper puts its fields in. All rows except the order, which is
+    §6's own layout.
   * `look_up` — the name, the staff number and the department behind an
     employee number, so the person typing can read them against the paper.
   * `range_check` — **the one place the range is counted**, and it is counted
@@ -43,11 +44,15 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import select
 
 from app.corrections import employee_by_number
-from app.hr_entry import leave_codes, leave_types, record_leave
-from app.models import EmployeeAssignment, ScreenUser
-
-# Who is at the keyboard on this screen. The other value is 'guard' (SPEC §3).
-HR = "hr"
+from app.hr_entry import (
+    HR,
+    leave_codes,
+    leave_types,
+    record_leave,
+    typist as _typist,
+    typists,
+)
+from app.models import EmployeeAssignment
 
 # **§6's own field order**, so a person reads down the page and down the paper
 # together. Not an assumed value and not a preference: it is the order the
@@ -89,27 +94,6 @@ def _parse_date(value, field: str) -> dt.date:
     except ValueError:
         raise ValueError(f"{field} is {value!r}, which is not a date. Dates "
                          "are YYYY-MM-DD") from None
-
-
-def typists(session) -> list[ScreenUser]:
-    """Who may be typing. **Rows, and attribution rather than a login** — the
-    same table the guard screen picks from, HR's side of it (SPEC §3)."""
-    return list(session.scalars(
-        select(ScreenUser)
-        .where(ScreenUser.screen == HR, ScreenUser.active.is_(True))
-        .order_by(ScreenUser.sort_order, ScreenUser.code)
-    ))
-
-
-def _typist(session, code: str) -> ScreenUser:
-    row = session.get(ScreenUser, (code or "").strip())
-    if row is None or row.screen != HR or not row.active:
-        allowed = [user.code for user in typists(session)]
-        raise ValueError(
-            f"{code!r} is not somebody on the HR list. A leave record says who "
-            f"typed it (SPEC §6). On the list: {allowed}"
-        )
-    return row
 
 
 def _assignment(session, employee_id: int, on: dt.date):
