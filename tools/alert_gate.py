@@ -85,7 +85,17 @@ def isolate(session) -> None:
     the fixture. Everything here is rolled back.
     """
     session.execute(text("DELETE FROM daily_attendance"))
-    session.execute(text("DELETE FROM manual_punch"))
+    # **The manual punches stay.** They used to be cleared here too, and did not
+    # need to be: `app/alert.py` reads devices, raw requests and schedules, and
+    # never looks at a correction. The database refuses the DELETE now anyway —
+    # a correction is an act somebody performed (SPEC §3, §13).
+    #
+    # What does have to move is the *derived* half of those rows: a correction
+    # points at the schedule its attendance day was worked out from, and the
+    # schedules are about to go. `schedule_id` is one of the two columns the
+    # no-edit rule leaves rebuildable, and `hr corrections rebuild-days` is what
+    # puts it back. Everything here is rolled back regardless.
+    session.execute(text("UPDATE manual_punch SET schedule_id = NULL"))
     session.execute(text("DELETE FROM group_schedule WHERE group_code <> :g"),
                     {"g": GROUP})
     session.flush()

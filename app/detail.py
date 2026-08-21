@@ -40,7 +40,13 @@ from app.schedule import effective_holiday
 
 @dataclass
 class PunchLine:
-    """One punch behind a day, exactly as it was recorded."""
+    """One punch behind a day, exactly as it was recorded.
+
+    `counted` is false for a re-pushed copy and for a cancelled correction, and
+    both are still listed. **A punch that disappears from view is
+    indistinguishable from one that never happened** (SPEC §3), so nothing here
+    drops a line — it says why the line does not count.
+    """
 
     at: dt.datetime | None
     source: str
@@ -49,6 +55,9 @@ class PunchLine:
     why: str | None
     counted: bool
     evidence: str
+    cancelled: bool = False
+    cancelled_by: str | None = None
+    cancelled_why: str | None = None
 
 
 @dataclass
@@ -66,6 +75,7 @@ class DetailDay:
     punch_count: int = 0
     manual_punch_count: int = 0
     duplicate_pushes: int = 0
+    cancelled_punch_count: int = 0
     status_code: str = ""
     is_rest_day: bool = False
     holiday_name: str | None = None
@@ -173,16 +183,22 @@ def render_detail(session, employee: Employee, start: dt.date,
             detail_day.punch_count = row.punch_count
             detail_day.manual_punch_count = row.manual_punch_count
             detail_day.duplicate_pushes = row.duplicate_pushes
+            detail_day.cancelled_punch_count = row.cancelled_punch_count
             detail_day.status_code = row.status_code
             detail_day.is_rest_day = row.is_rest_day
 
-        if with_punches and row is not None and row.punch_count:
+        # **`cancelled_punch_count` is in this condition on purpose.** A day
+        # whose only punch was cancelled has a punch count of zero, and without
+        # it the cancelled punch would vanish from the one screen that exists
+        # to show it.
+        if with_punches and row is not None and (
+                row.punch_count or row.cancelled_punch_count):
             seen: set = set()
             for record in punches_for(session, employee.id, day):
                 # A re-pushed punch is kept and shown, and says it was not
                 # counted. The raw layer never loses a copy and neither does
                 # this view (SPEC §12, A37).
-                counted = True
+                counted = not record.cancelled
                 if not record.manual:
                     if record.at in seen:
                         counted = False
@@ -192,6 +208,9 @@ def render_detail(session, employee: Employee, start: dt.date,
                     at=record.at, source=record.source, manual=record.manual,
                     who=record.who, why=record.why, counted=counted,
                     evidence=record.evidence,
+                    cancelled=record.cancelled,
+                    cancelled_by=record.cancelled_by,
+                    cancelled_why=record.cancelled_why,
                 ))
 
         days.append(detail_day)
@@ -271,10 +290,21 @@ def to_text(detail: Detail, with_punches: bool = False) -> str:
                    + (f"   {'; '.join(marks)}" if marks else ""))
         if with_punches:
             for punch in day.punches:
-                counted = "counted" if punch.counted else "copy, not counted"
+                if punch.cancelled:
+                    counted = "CANCELLED"
+                elif punch.counted:
+                    counted = "counted"
+                else:
+                    counted = "copy, not counted"
                 who = f"  {punch.who}" if punch.who else ""
                 out.append(f"            {punch.at}  {punch.source:<15}"
                            f"{counted:<18}{who}")
+                if punch.cancelled:
+                    # Said in full, because "CANCELLED" alone leaves the reader
+                    # to guess who decided and why (SPEC §3).
+                    out.append(f"            {'':20}  cancelled by "
+                               f"{punch.cancelled_by} — {punch.cancelled_why}. "
+                               "The punch row is unchanged")
 
     if detail.leave:
         out.append("")
@@ -328,6 +358,7 @@ def to_json(detail: Detail) -> dict:
                 "punch_count": day.punch_count,
                 "manual_punch_count": day.manual_punch_count,
                 "duplicate_pushes": day.duplicate_pushes,
+                "cancelled_punch_count": day.cancelled_punch_count,
                 "status_code": day.status_code,
                 "is_rest_day": day.is_rest_day,
                 "holiday_name": day.holiday_name,
@@ -344,6 +375,9 @@ def to_json(detail: Detail) -> dict:
                         "why": punch.why,
                         "counted": punch.counted,
                         "evidence": punch.evidence,
+                        "cancelled": punch.cancelled,
+                        "cancelled_by": punch.cancelled_by,
+                        "cancelled_why": punch.cancelled_why,
                     }
                     for punch in day.punches
                 ],

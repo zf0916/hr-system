@@ -410,6 +410,50 @@ def _rows() -> list:
     ]
 
 
+# **The tables that hold nothing anybody typed.** Both are declared disposable
+# by SPEC §3 and both have a command that rebuilds them from the layer above.
+# When the model gives one of them a new column, dropping and recreating it
+# costs a rebuild and nothing else — so `hr seed --add-missing` may do that,
+# and may not do it to anything else.
+#
+# **Written out rather than inferred.** A rule that worked out for itself which
+# tables were safe to drop would be one mistake away from dropping a table
+# somebody typed into.
+REBUILDABLE = {
+    "daily_attendance": "hr attendance build --from <date> --to <date>",
+    "parsed_punch": "hr replay",
+}
+
+
+def resync_rebuildable(engine) -> list[tuple[str, str]]:
+    """Recreate any rebuildable table whose columns no longer match the model.
+
+    Returns (table, the command that refills it) for each one recreated.
+    `create_all` adds tables and never alters one, so a new column on a table
+    that already exists would otherwise never reach the database — silently,
+    and only noticed when something wrote to it.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    from app.models import Base
+
+    inspector = sa_inspect(engine)
+    recreated: list[tuple[str, str]] = []
+    for name, command in REBUILDABLE.items():
+        table = Base.metadata.tables.get(name)
+        if table is None or not inspector.has_table(name):
+            continue
+        present = {column["name"] for column in inspector.get_columns(name)}
+        wanted = {column.name for column in table.columns}
+        if present == wanted:
+            continue
+        with engine.begin() as conn:
+            table.drop(conn, checkfirst=True)
+            table.create(conn)
+        recreated.append((name, command))
+    return recreated
+
+
 def _key(model, row) -> tuple:
     """A seeded row's primary key, read off the object rather than assumed."""
     from sqlalchemy import inspect as sa_inspect

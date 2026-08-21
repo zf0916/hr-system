@@ -19,8 +19,8 @@ HR. A shared passphrase would be the device's shared password one layer up
 
 **Every route here is one call into a service module.** `app.screens` for the
 read-only screens, `app.guard` for the guard's, `app.leave_entry` and
-`app.gate_pass_entry` for the two forms HR types — and nothing else of the
-application is imported. They hand back finished
+`app.gate_pass_entry` for the two forms HR types, `app.hr_corrections` for HR's
+corrections — and nothing else of the application is imported. They hand back finished
 answers, so there is nothing on this side of the wall to compute a figure from.
 A screen is a face on a function that already exists; it never becomes a second
 place where the answer is worked out.
@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import gate_pass_entry, guard, leave_entry, screens
+from app import gate_pass_entry, guard, hr_corrections, leave_entry, screens
 from app.db import Session, database_state
 
 # Where the Dockerfile's build stage leaves the compiled interface. On a
@@ -132,6 +132,40 @@ class GatePassEntry(BaseModel):
     category_code: str
     reason: str | None = None
     destination: str | None = None
+
+
+class Retroactive(BaseModel):
+    """What the HR corrections screen may send to add a punch.
+
+    **A time is here, and that is the difference from a guard entry.** §3 keeps
+    the two paths apart: the guard's payload has no time field and cannot be
+    given one, because a guard who can type a time can be asked to type a
+    different one. HR types the time it is correcting. `extra="forbid"` keeps
+    the two from drifting together — a `reason_code` from the guard's list is a
+    `422` here, and this model has no field the guard's has.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    entered_by: str
+    employee_number: str
+    at: str
+    reason: str
+
+
+class Cancellation(BaseModel):
+    """What the HR corrections screen may send to cancel one.
+
+    Three names and an id. **There is nothing here that could edit the punch**
+    — no time, no reason to replace the original's, no author to overwrite —
+    because a cancellation is a row beside it, not a change to it (SPEC §3).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    cancelled_by: str
+    punch_id: int
+    reason: str
 
 
 def _write(function, session, **arguments):
@@ -332,6 +366,51 @@ def create_hr_app() -> FastAPI:
                 pass_date=entry.pass_date, out_time=entry.out_time,
                 in_time=entry.in_time, category_code=entry.category_code,
                 reason=entry.reason, destination=entry.destination))
+
+    # ---- HR corrections (piece 6) ----------------------------------------
+
+    @app.get("/api/corrections/screen")
+    def corrections_screen():
+        """Who may type one, and what this path is not."""
+        with Session() as session:
+            return JSONResponse(_read(hr_corrections.screen, session))
+
+    @app.get("/api/corrections/list")
+    def corrections_list(employee: str,
+                         start: str = Query(..., alias="from"),
+                         end: str = Query(..., alias="to")):
+        """The corrections on record for one employee over a period.
+
+        **Manual punches only**, because the read underneath touches
+        `manual_punch` and no other table (SPEC §3).
+        """
+        with Session() as session:
+            return JSONResponse(_read(
+                hr_corrections.listing, session, employee_number=employee,
+                start=start, end=end))
+
+    @app.post("/api/corrections/retroactive")
+    def corrections_retroactive(entry: Retroactive):
+        """HR adds a punch the device did not take. **The HR path**, which is
+        the one with a time on it (SPEC §3)."""
+        with Session() as session:
+            return JSONResponse(_write(
+                hr_corrections.record, session, entered_by=entry.entered_by,
+                employee_number=entry.employee_number, at=entry.at,
+                reason=entry.reason))
+
+    @app.post("/api/corrections/cancel")
+    def corrections_cancel(entry: Cancellation):
+        """Void a correction with a row.
+
+        **There is no route that edits one and no route that deletes one**, and
+        the database refuses both under this (SPEC §3, §13).
+        """
+        with Session() as session:
+            return JSONResponse(_write(
+                hr_corrections.cancel, session,
+                cancelled_by=entry.cancelled_by, punch_id=entry.punch_id,
+                reason=entry.reason))
 
     @app.api_route(
         "/iclock/{rest:path}",

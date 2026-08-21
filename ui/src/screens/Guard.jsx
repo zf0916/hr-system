@@ -319,7 +319,7 @@ export default function Guard({ search, go }) {
             ref={dialog}
             data-dialog
             onClose={() => {}}
-            className="w-[22rem] max-w-[calc(100%-2rem)] rounded-xl p-5 backdrop:bg-slate-900/40"
+            className="m-auto w-[22rem] max-w-[calc(100%-2rem)] rounded-xl p-5 backdrop:bg-slate-900/40"
           >
             <p data-dialog-question className="text-lg text-slate-900">
               Record a punch for{' '}

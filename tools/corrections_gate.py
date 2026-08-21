@@ -274,11 +274,13 @@ def main() -> int:
                 reason="device down after the power cut", made_by="HR: Mei Ling")
             rows = correction_counts(session, TODAY - dt.timedelta(days=30),
                                      TODAY + dt.timedelta(days=1))
-            counted = {(number, path): entries for number, path, entries, _, _ in rows}
+            counted = {(number, path): (entries, cancelled)
+                       for number, path, entries, cancelled, _, _ in rows}
             gate.check(
-                counted.get((NUMBER, "guard")) == 3
-                and counted.get((NUMBER, "hr_retroactive")) == 1,
-                "manual punches are counted per employee per period, by path",
+                counted.get((NUMBER, "guard")) == (3, 0)
+                and counted.get((NUMBER, "hr_retroactive")) == (1, 0),
+                "manual punches are counted per employee per period, by path, "
+                "with cancellations counted separately",
                 f"got {counted}",
             )
         finally:

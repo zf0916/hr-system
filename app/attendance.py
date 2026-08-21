@@ -135,6 +135,14 @@ def build_day(session, employee_id: int, day: dt.date) -> BuiltDay:
     schedule = context.schedule if context else None
 
     records = punches_for(session, employee_id, day)
+
+    # **A cancelled correction is not counted, and the row says how many there
+    # were.** The punch itself is untouched and still appears in the day's
+    # detail marked cancelled (SPEC §3): a figure that quietly loses a punch,
+    # and a day where the punch never happened, must not look the same.
+    cancelled = [r for r in records if r.cancelled]
+    records = [r for r in records if not r.cancelled]
+
     timed = [r for r in records if r.at is not None]
     timed.sort(key=lambda r: r.at)
 
@@ -182,6 +190,11 @@ def build_day(session, employee_id: int, day: dt.date) -> BuiltDay:
         notes.append(
             f"{len(manual)} of {len(timed)} punches were entered by a person"
         )
+    if cancelled:
+        notes.append(
+            f"{len(cancelled)} correction(s) on this day were cancelled and "
+            "are not counted; the punches are still on the record (SPEC §3)"
+        )
 
     values = {
         "employee_id": employee_id,
@@ -205,6 +218,7 @@ def build_day(session, employee_id: int, day: dt.date) -> BuiltDay:
         "last_out_manual": bool(last.manual) if last else False,
         "punch_count": len(timed),
         "duplicate_pushes": duplicate_pushes,
+        "cancelled_punch_count": len(cancelled),
         "device_punch_count": sum(1 for r in timed if not r.manual),
         "manual_punch_count": sum(1 for r in timed if r.manual),
         "late_minutes": late,

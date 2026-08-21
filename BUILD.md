@@ -42,7 +42,7 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 |**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it — **built; the rows exist and a total is a query away**|
 |**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7) — **built; leave codes appear, and the browser draws the same render**|
 |**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device — **the queue is built and carries REBOOT and CHECK; user push waits on the formats being real**|
-|**10**|**The screen** — the HR interface and the guard's one screen, in seven pieces|Each piece has its own gate; **pieces 1 to 5 are built** — the serving shape, the read-only screens, the guard screen, leave entry, gate pass entry|
+|**10**|**The screen** — the HR interface and the guard's one screen, in seven pieces|Each piece has its own gate; **pieces 1 to 6 are built** — the serving shape, the read-only screens, the guard screen, leave entry, gate pass entry, HR corrections|
 |**9**|**Ingestion alert** — warns when punches stop arriving|Silence for N hours raises a warning — **built; contact silence and punch silence are separate, both rows**|
 
 **Then: demo to HR, walking the assumed values line by line while the software is on screen.**
@@ -85,7 +85,25 @@ What it produces across the 54 employees who have a PIN: two punches on most wor
 
 `tools/serving_gate.py` is 31 checks, and it asks both ports the way a device and a browser would. Broken on purpose, two ways: **mounting the receiver into the HR app and removing the refusal** put a live handshake on the tunnel's port — `GET OPTION FROM: GATE` — and six checks failed; **mounting it while leaving the refusal in front of it** answers `404` correctly and is still caught, because the interface must not so much as import the receiver. An app that imports it is one reordering away from serving it.
 
-The seven pieces, in order: **1 serving shape** · **2 read-only screens** · **3 the guard screen** · **4 leave entry** · **5 gate pass entry** · 6 HR corrections · 7 the demo pass.
+The seven pieces, in order: **1 serving shape** · **2 read-only screens** · **3 the guard screen** · **4 leave entry** · **5 gate pass entry** · **6 HR corrections** · 7 the demo pass.
+
+**Step 10, piece 6 is built: HR corrections.** One page at `/corrections`, two acts, both through the functions `hr corrections retroactive` and `hr corrections cancel` call.
+
+**Adding a punch the device did not take** is the HR path, and the screen says which path it is: *HR types the time it is correcting … the guard's screen records that an employee is standing in front of the guard now, the server stamps the moment, and there is no field for a time at all.* The two look alike from a distance and only one has a time box, which is why they are two screens, two service modules and two payloads. `app/hr_corrections.py` does not import `app.guard`, never names the guard's path by name or by value, and **the interface's nav does not offer `/guard`** — a break that added a link to it failed in the browser and in two source checks.
+
+**A correction is now cancelled by a row.** The guard's screen has always told employees that HR fixes mistakes, and until now nothing could. A cancellation is a row in `manual_punch_cancellation` carrying who cancelled it and why; **the punch itself is untouched** — same time, same reason, same person, same stamp — and the gate compares all eight recorded columns before and after to say so.
+
+**The database enforces it, so it stays true of whatever is written next.** `manual_punch` refuses a `DELETE` outright and refuses an `UPDATE` that changes anything a person recorded. **The two derived columns stay rebuildable** — `attendance_day` and `schedule_id` are worked out from the schedule in force, and `hr corrections rebuild-days` is what recomputes them. The cancellation table is append-only in full: a cancellation that could be quietly removed would put the punch back with nothing saying it had ever been off.
+
+**The figures stop counting it and say how many they left out.** `build_day` drops cancelled corrections before working anything out, `daily_attendance` gained `cancelled_punch_count`, and the note says so in words. **The per-day detail still shows the punch, marked cancelled**, with who cancelled it and why: a punch that disappears from view is indistinguishable from one that never happened. That condition includes `cancelled_punch_count` deliberately — a day whose only punch was cancelled has a punch count of zero, and without it the one screen that exists to show the punch would hide it.
+
+**Only a correction can be cancelled.** The list HR chooses from reads `manual_punch` and no other table, so there is no device punch for it to offer and no filter to get wrong; an id that is not a manual punch is refused by name. A break that made the list include device punches and made the cancel fall back to "whatever punch that id names" failed five checks.
+
+**Three things had to change underneath.** `hr seed --add-missing` now **applies the append-only rules on every run** — `create_all` fires an after-create hook only for a table it has just made, so a rule added to a table that already exists would never have reached the database it was written for. It also **recreates a rebuildable table whose columns no longer match the model**: `daily_attendance` and `parsed_punch` are named in a written-out list, because a rule that worked out for itself which tables were safe to drop would be one mistake away from dropping a table somebody typed into. And **`tools/employee_import_gate.py` now runs against a throwaway database**: most of its cases need a `--replace`, which is refused while a correction exists, and a correction can no longer be cleared out of the way. `tools/alert_gate.py` stopped clearing corrections too — it never needed to, since `app/alert.py` reads devices, requests and schedules and never looks at one.
+
+**`tools/corrections_screen_gate.py` is 102 checks**, and it presses the page: choose who is correcting, add a punch, find it by employee and period, press *Cancel this*, press *Keep it*, then cancel it for real — and read the result out of the CLI and the sheet afterwards. Broken on purpose, four ways: **a cancellation that wrote its reason into the punch's own row** was refused by the database before it could; **the daily row still counting a cancelled punch** failed five checks across both the empty day and the day with device punches on it; **the detail hiding a cancelled punch** failed two; **the guard path made reachable** failed four, in the nav, in the page source, in the module's code and in its use of the guard's path constant.
+
+**A dialog that opened in the corner.** Tailwind's preflight sets `margin: 0` on everything, and that includes the `margin: auto` a modal `<dialog>` centres itself with — so the confirmation opened at the top-left of a 1280px page. **The guard's dialog had the same defect** and was never noticed, because at 390px a dialog pinned to the left edge looks about right. Both put the margin back, and the gate now measures where the dialog actually is rather than only that it opened.
 
 **Step 10, piece 5 is built: gate pass entry.** One page at `/gatepass`. **HR types a pass that has already been signed on paper** (SPEC §5), out and in times included, through `hr_entry.record_gate_pass` — the same function `hr gatepass add` calls.
 
@@ -129,7 +147,7 @@ The seven pieces, in order: **1 serving shape** · **2 read-only screens** · **
 
 **The name showing back is the whole safeguard**, so it is the largest thing on the screen — and the last step names the person once more. The page's button says **Submit** and opens a dialog: *Record a punch for Lim Wei Sheng, 0090?* A big green button low on a phone screen is easy to press while scrolling, and a dialog that only asked "are you sure?" would add a tap without adding a check. **Cancel holds the focus, explicitly** — leaving it to the dialog's own rule would make the safe default an accident of markup order that a later edit reverses silently.
 
-The confirm step lives at `/guard?employee=0090`, which means the phone's Back button undoes a mistyped number — the correction that has to be easy, because the one after confirming does not exist. The page says in those words that a confirmed entry cannot be undone and that HR fixes mistakes. **No void path was built**; that question is still parked for piece 6.
+The confirm step lives at `/guard?employee=0090`, which means the phone's Back button undoes a mistyped number — the correction that has to be easy, because the one after confirming does not exist. The page says in those words that a confirmed entry cannot be undone and that HR fixes mistakes. **No void path was built**, and none exists now either: piece 6 answers it the other way, by cancelling the entry with a row that leaves it on the record.
 
 **No time, at four depths.** There is no time control on the page; the request model declares three fields and `forbid`s a fourth, so a crafted payload is a `422` rather than a value quietly dropped; `guard.record` and `record_guard_entry` have no parameter for one; and `manual_punch_guard_cannot_state_a_time` refuses the row underneath all of it.
 
@@ -159,7 +177,7 @@ The confirm step lives at `/guard?employee=0090`, which means the phone's Back b
 
 **The grid freezes its edges the way the file does.** The three identifying columns stay put while the days scroll, the day-number and weekday rows stay put while the employees scroll, and the grid scrolls inside a bounded box so the horizontal scrollbar is reachable without passing 58 rows first — the screen's answer to the file's freeze panes and repeating print titles. Each day column is as wide as the widest thing in it, which is the rule `to_text` already followed. **Shading was a header-only stripe and is now the whole column**, cells included, as `to_excel` fills it.
 
-**`tools/screens_gate.py` is 109 checks**, and it reads the page out of a real browser — Chromium's own `--dump-dom` inside the Playwright image, no driver package and nothing installed at run time. Broken on purpose, four ways: **the browser truncating a two-time cell** to its first half changed ten cells and was caught only by the DOM check, which is the whole reason that check exists; **dropping the deterministic write** made two exports differ and the download stop matching; **a loop and an import added to a route handler** failed the import check and the AST check together; **widening the fixture-serial pattern** to `^(GATE|TEST|CHECK|NOT|PYA)` made the real device look like a fixture and failed on its serial by name.
+**`tools/screens_gate.py` is 113 checks**, and it reads the page out of a real browser — Chromium's own `--dump-dom` inside the Playwright image, no driver package and nothing installed at run time. Broken on purpose, four ways: **the browser truncating a two-time cell** to its first half changed ten cells and was caught only by the DOM check, which is the whole reason that check exists; **dropping the deterministic write** made two exports differ and the download stop matching; **a loop and an import added to a route handler** failed the import check and the AST check together; **widening the fixture-serial pattern** to `^(GATE|TEST|CHECK|NOT|PYA)` made the real device look like a fixture and failed on its serial by name.
 
 **One of those breaks passed the first time and should not have.** The rebuilt image had not reached the container, so the gate read the old page and agreed with it. The bundle is now checked for the change before the failure is believed — a gate proven against a stale artefact proves nothing.
 
@@ -297,7 +315,7 @@ Run it:
     http://<server>:8090/            # employees, on a date
     http://<server>:8090/sheet?month=2026-08
     http://<server>:8090/employee/0090?month=2026-08
-    uv run python tools/screens_gate.py        # 109 checks; reads the real DOM
+    uv run python tools/screens_gate.py        # 113 checks; reads the real DOM
     uv run python tools/screens_gate.py --no-dom   # without Docker
 
     http://<server>:8090/leave              # leave entry, off the paper form
@@ -311,6 +329,13 @@ Run it:
     uv run python tools/gate_pass_gate.py      # 87 checks; presses the page,
                                                #   and saves on a throwaway
     uv run python tools/gate_pass_gate.py --no-dom     # without the browser
+
+    http://<server>:8090/corrections        # HR corrections: add one, cancel one
+    uv run python tools/corrections_screen_gate.py     # 102 checks; presses the
+                                                       #   page, on a throwaway
+    hr corrections list --employee 0090 --from 2026-08-01 --to 2026-08-31
+    hr corrections cancel --punch 155 --reason "..." --by "HR: ..."
+    hr attendance build --from ... --to ...   # so the figures stop counting it
 
     hr alert fixtures                          # what the unwatched list omits
 
@@ -520,8 +545,7 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**How early before a shift, and how late after it, does a punch still belong to that day?** (SPEC §9 A30). The seeded 240 minutes is a guess; real punches settle it|The first real capture|Daily attendance|
 |**Which group runs which shift** (SPEC §9 A31)? The seeded schedules are provisional and marked so in the database|HR|Schedule|
 |**The group codes themselves are invented.** DAY-PROD, NIGHT-PROD and OFFICE came from the sample spreadsheet, not from HR — they are replaced by whatever the real employee list carries, not corrected|HR|Schedule|
-|**How is a mistaken correction undone?** A guard entry made for the wrong employee cannot be edited or deleted, and SPEC §3 does not say what should replace it|HR, then management|Corrections|
-|**What happens when the guard confirms the wrong employee?** The screen shows the name back before he confirms — built, and the largest thing on it — and the row is still un-removable once made (SPEC §3). **No void path exists.** Piece 6 is where it has to be answered|Management, then HR|Step 10, piece 6|
+|**How is a mistaken cancellation undone?** A cancellation is a row and cannot be edited or deleted either; what should replace a wrong one is undecided, and a delete would settle it by accident (SPEC §13). The screen names the punch and asks why before writing one, and *Keep it* holds the focus — the same mitigation the guard's dialog has|HR, then management|Nothing — it is one more row when it is answered|
 |**Who is on the guard roster?** `screen_user` holds two placeholders marked provisional, and the guard screen says so on its face (SPEC §9 A51). Replaced by an UPDATE, not corrected|HR|Nothing — they are rows|
 |**How often does a missed punch actually happen?** It decides whether a signed slip is a formality or whether the real question is enrollment quality|HR|The correction evidence decision|
 |**When is the Excel sheet printed and filed?** Monthly on a period boundary is the assumption. Does not block the build|HR|Nothing structural|

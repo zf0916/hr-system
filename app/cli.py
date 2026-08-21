@@ -23,6 +23,7 @@ from app.employee_import import (
     run_import,
 )
 from app.models import (
+    APPEND_ONLY_RULES,
     Base,
     DailyAttendance,
     DeviceState,
@@ -51,6 +52,7 @@ from app.cli_raw import add_parsers as add_raw_parsers
 from app.cli_schedule import add_parsers as add_schedule_parsers
 from app.cli_sheet import add_parsers as add_sheet_parsers
 from app.parser import replay as replay_parser
+from app.seed import resync_rebuildable
 from app.seed import seed as seed_rows
 
 
@@ -67,9 +69,29 @@ def cmd_seed(args) -> int:
     # gained the row somebody expected from one that gained six nobody did.
     if args.add_missing:
         Base.metadata.create_all(engine)
+        # **The rules that are not columns.** `create_all` fires an after_create
+        # hook only for a table it has just made, so an append-only rule added
+        # to a table that already exists would never reach the database it was
+        # written for. Every statement is re-runnable, so this is applied on
+        # every run rather than tracked.
+        with engine.begin() as conn:
+            for statement in APPEND_ONLY_RULES:
+                conn.execute(text(statement))
+        # A new column on a table that already exists never reaches the
+        # database through `create_all`. For the two tables that hold nothing
+        # anybody typed, recreating is the whole migration — and the rebuild
+        # command is printed rather than run, because rebuilding a month is a
+        # decision about a period.
+        recreated = resync_rebuildable(engine)
         with Session() as session:
             added, undecidable = seed_rows(session, only_missing=True)
         print(f"schema brought up to the model at {_dsn()}")
+        print(f"applied: {len(APPEND_ONLY_RULES)} append-only rules — a "
+              "correction is cancelled by a row, never edited or deleted "
+              "(SPEC §3, §13)")
+        for table, command in recreated:
+            print(f"recreated: {table} — its columns no longer matched the "
+                  f"model, and it is rebuilt by: {command}")
         if not added:
             print("added: nothing — every seeded row was already there")
         for table, keys in added.items():

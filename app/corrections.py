@@ -30,6 +30,7 @@ from app.models import (
     EmployeeAssignment,
     EmployeeNumberKey,
     ManualPunch,
+    ManualPunchCancellation,
     ParsedPunch,
     RawRequest,
     SiteSetting,
@@ -48,6 +49,12 @@ class PunchRecord:
 
     `source` and `manual` are on every row. There is no way to read this list
     and not know which lines a person entered.
+
+    **`cancelled` is on every row too, and a cancelled row is still returned.**
+    A punch that vanishes from the detail when it is taken out of the figures
+    is indistinguishable from one nobody ever made, which is the hole §3 keeps
+    closing. What changes is that the figures stop counting it — that happens
+    where the figures are built, not by dropping the line here.
     """
 
     at: dt.datetime | None
@@ -58,6 +65,11 @@ class PunchRecord:
     why: str | None = None
     recorded_at: dt.datetime | None = None
     evidence: str = ""
+    punch_id: int | None = None
+    cancelled: bool = False
+    cancelled_by: str | None = None
+    cancelled_why: str | None = None
+    cancelled_at: dt.datetime | None = None
 
 
 def site_timezone(session) -> str:
@@ -272,8 +284,11 @@ def device_punches_for(session, employee_id: int, day: dt.date) -> list[PunchRec
 
 
 def manual_punches_for(session, employee_id: int, day: dt.date) -> list[PunchRecord]:
-    rows = session.scalars(
-        select(ManualPunch)
+    """Every correction on this day, cancelled ones included and marked."""
+    rows = session.execute(
+        select(ManualPunch, ManualPunchCancellation)
+        .outerjoin(ManualPunchCancellation,
+                   ManualPunchCancellation.manual_punch_id == ManualPunch.id)
         .where(
             ManualPunch.employee_id == employee_id,
             ManualPunch.attendance_day == day,
@@ -283,7 +298,7 @@ def manual_punches_for(session, employee_id: int, day: dt.date) -> list[PunchRec
     timezone = ZoneInfo(site_timezone(session))
 
     records = []
-    for row in rows:
+    for row, cancellation in rows:
         if row.path == GUARD:
             at = row.recorded_at.astimezone(timezone).replace(tzinfo=None)
             source = "guard entry"
@@ -293,6 +308,12 @@ def manual_punches_for(session, employee_id: int, day: dt.date) -> list[PunchRec
             at = row.asserted_time
             source = "HR retroactive"
             why = row.reason
+        evidence = f"manual_punch {row.id}"
+        if row.path == GUARD:
+            evidence += ", server-stamped, no time was typed"
+        if cancellation is not None:
+            evidence += (f"; cancelled by manual_punch_cancellation "
+                         f"{cancellation.id} — the punch row is unchanged")
         records.append(PunchRecord(
             at=at,
             source=source,
@@ -301,8 +322,121 @@ def manual_punches_for(session, employee_id: int, day: dt.date) -> list[PunchRec
             who=row.made_by,
             why=why,
             recorded_at=row.recorded_at,
-            evidence=f"manual_punch {row.id}"
-            + (", server-stamped, no time was typed" if row.path == GUARD else ""),
+            evidence=evidence,
+            punch_id=row.id,
+            cancelled=cancellation is not None,
+            cancelled_by=cancellation.cancelled_by if cancellation else None,
+            cancelled_why=cancellation.reason if cancellation else None,
+            cancelled_at=cancellation.cancelled_at if cancellation else None,
+        ))
+    return records
+
+
+def cancel_manual_punch(session, manual_punch_id: int, *, reason: str,
+                        cancelled_by: str,
+                        note: str | None = None) -> ManualPunchCancellation:
+    """Void a correction with a row. **Never an edit and never a delete.**
+
+    The `manual_punch` being cancelled is not touched: same time, same reason,
+    same person, same stamp, and the database refuses an `UPDATE` that changes
+    any of them (SPEC §3, §13). What changes is that the figures stop counting
+    it — `attendance.build_day` leaves a cancelled punch out of first in, last
+    out and the counts, and records how many it left out.
+
+    **Only a manual punch can be cancelled.** A device punch is a fact from the
+    hardware; there is no row here for one and nothing in this module touches
+    `parsed_punch`. An id that is not a manual punch is refused by name rather
+    than silently doing nothing.
+
+    **It does not commit** — the caller does (CLAUDE.md).
+    """
+    if not reason or not reason.strip():
+        raise ValueError(
+            "a cancellation records why. It is a correction like any other and "
+            "carries who made it and why (SPEC §3)"
+        )
+    if not cancelled_by or not cancelled_by.strip():
+        raise ValueError("a cancellation records who made it")
+
+    punch = session.get(ManualPunch, manual_punch_id)
+    if punch is None:
+        raise ValueError(
+            f"{manual_punch_id!r} is not a manual punch. Only a correction "
+            "somebody entered can be cancelled — a device punch is a fact from "
+            "the hardware and nothing here touches it (SPEC §3)"
+        )
+    existing = session.scalars(
+        select(ManualPunchCancellation)
+        .where(ManualPunchCancellation.manual_punch_id == punch.id)
+    ).first()
+    if existing is not None:
+        raise ValueError(
+            f"manual_punch {punch.id} was already cancelled by "
+            f"{existing.cancelled_by} at {existing.cancelled_at}. Cancelling "
+            "twice is not two facts"
+        )
+
+    row = ManualPunchCancellation(
+        manual_punch_id=punch.id,
+        reason=reason.strip(),
+        cancelled_by=cancelled_by.strip(),
+        note=note,
+    )
+    session.add(row)
+    session.flush()
+    session.refresh(row)
+    return row
+
+
+def manual_punches_in(session, employee_id: int | None, start: dt.date,
+                      end: dt.date) -> list[PunchRecord]:
+    """Every correction over a period, so HR can find the one to cancel.
+
+    **Manual punches only, by construction**: this reads `manual_punch` and
+    nothing else, so there is no device punch for it to offer. Each row carries
+    the id a cancellation names, the time, why, who entered it, and whether it
+    has already been cancelled.
+    """
+    query = (
+        select(ManualPunch, ManualPunchCancellation, Employee.employee_number)
+        .outerjoin(ManualPunchCancellation,
+                   ManualPunchCancellation.manual_punch_id == ManualPunch.id)
+        .join(Employee, Employee.id == ManualPunch.employee_id)
+        .where(
+            ManualPunch.attendance_day >= start,
+            ManualPunch.attendance_day <= end,
+        )
+        .order_by(ManualPunch.attendance_day, ManualPunch.recorded_at)
+    )
+    if employee_id is not None:
+        query = query.where(ManualPunch.employee_id == employee_id)
+
+    timezone = ZoneInfo(site_timezone(session))
+    records = []
+    for row, cancellation, number in session.execute(query).all():
+        if row.path == GUARD:
+            at = row.recorded_at.astimezone(timezone).replace(tzinfo=None)
+            reason = session.get(CorrectionReason, row.reason_code)
+            why = reason.label if reason else row.reason_code
+            source = "guard entry"
+        else:
+            at = row.asserted_time
+            why = row.reason
+            source = "HR retroactive"
+        records.append(PunchRecord(
+            at=at,
+            source=source,
+            manual=True,
+            attendance_day=row.attendance_day,
+            who=row.made_by,
+            why=why,
+            recorded_at=row.recorded_at,
+            evidence=f"manual_punch {row.id}, employee {number}",
+            punch_id=row.id,
+            cancelled=cancellation is not None,
+            cancelled_by=cancellation.cancelled_by if cancellation else None,
+            cancelled_why=cancellation.reason if cancellation else None,
+            cancelled_at=cancellation.cancelled_at if cancellation else None,
         ))
     return records
 
@@ -332,10 +466,17 @@ def correction_counts(session, start: dt.date, end: dt.date,
             Employee.employee_number,
             ManualPunch.path,
             func.count().label("entries"),
+            # **A cancelled correction is still counted.** The act happened,
+            # and the signal §3 asks for is how often somebody had to make one
+            # — not how many survived. It is reported separately so the two
+            # facts stay apart.
+            func.count(ManualPunchCancellation.id).label("cancelled"),
             func.min(ManualPunch.attendance_day).label("first_day"),
             func.max(ManualPunch.attendance_day).label("last_day"),
         )
         .join(Employee, Employee.id == ManualPunch.employee_id)
+        .outerjoin(ManualPunchCancellation,
+                   ManualPunchCancellation.manual_punch_id == ManualPunch.id)
         .where(
             ManualPunch.attendance_day >= start,
             ManualPunch.attendance_day <= end,

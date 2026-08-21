@@ -85,21 +85,41 @@ Index("ix_raw_request_table_param", RawRequest.table_param)
 # "Append-only" is a property of the table, not of the code that happens to
 # write to it today. Dropping and recreating the database still works; a stray
 # UPDATE or DELETE does not.
-APPEND_ONLY = DDL(
+# Every one of these is re-runnable, which is what lets `hr seed --add-missing`
+# apply them to a database whose tables already exist. `create_all` only fires
+# an after_create hook for a table it has just made, so a rule added to a table
+# that is already there would otherwise never reach the database it was written
+# for — and a guarantee that is only in the model is not a guarantee.
+APPEND_ONLY_RULES: list[str] = []
+
+
+def _append_only(table, statement: str) -> None:
+    """Register one re-runnable rule, and apply it when the table is created.
+
+    **No `%` appears in any of these**, deliberately. `RAISE EXCEPTION 'x %'`
+    would have to be written `%%` for `DDL` and `%` for a plain `text()`, and
+    the same statement is used both ways — so the messages are built with
+    `USING MESSAGE =` and string concatenation, which needs no escaping and
+    cannot be doubled by whatever runs it.
     """
+    assert "%" not in statement, "no % in an append-only rule: see _append_only"
+    APPEND_ONLY_RULES.append(statement)
+    event.listen(table, "after_create", DDL(statement))
+
+
+_append_only(RawRequest.__table__, """
 CREATE OR REPLACE FUNCTION raw_request_append_only() RETURNS trigger AS $$
 BEGIN
-    RAISE EXCEPTION 'raw_request is append-only (SPEC.md 12): %% rejected', TG_OP;
+    RAISE EXCEPTION USING MESSAGE =
+        'raw_request is append-only (SPEC.md 3, 12): ' || TG_OP || ' rejected';
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER raw_request_no_update BEFORE UPDATE ON raw_request
+CREATE OR REPLACE TRIGGER raw_request_no_update BEFORE UPDATE ON raw_request
     FOR EACH ROW EXECUTE FUNCTION raw_request_append_only();
-CREATE TRIGGER raw_request_no_delete BEFORE DELETE ON raw_request
+CREATE OR REPLACE TRIGGER raw_request_no_delete BEFORE DELETE ON raw_request
     FOR EACH ROW EXECUTE FUNCTION raw_request_append_only();
-"""
-)
-event.listen(RawRequest.__table__, "after_create", APPEND_ONLY)
+""")
 
 
 class ParsedPunch(Base):
@@ -789,6 +809,119 @@ class ManualPunch(Base):
     )
 
 
+class ManualPunchCancellation(Base):
+    """A correction that voids an earlier one. **A row, never an edit.**
+
+    SPEC §3 says punch data is never edited and a correction is a separate row.
+    Cancelling one is that rule applied to the correction layer itself: the
+    original `manual_punch` stays exactly as it was written — same time, same
+    reason, same person, same stamp — and this row sits beside it saying who
+    cancelled it and why.
+
+    **Why this is a table and not two columns on `manual_punch`.** Columns
+    would mean an `UPDATE` of the row being cancelled, which is the edit §13
+    forbids, and the original would no longer be readable as it stood. A
+    separate row leaves the original untouched and is provable: the punch's
+    every recorded column can be compared before and after.
+
+    **One cancellation per punch**, enforced here. Cancelling twice is not two
+    facts, and a second row would put two people and two reasons against one
+    act with nothing to say which counts.
+
+    **Nothing undoes a cancellation**, and no path is provided that could — the
+    same position piece 3 took on undoing a guard entry. What should replace a
+    mistaken one is parked; a delete would settle it by accident.
+    """
+
+    __tablename__ = "manual_punch_cancellation"
+
+    id = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    manual_punch_id = mapped_column(
+        BigInteger, ForeignKey("manual_punch.id"), nullable=False, unique=True
+    )
+    cancelled_at = mapped_column(
+        SERVER_TS, nullable=False, server_default=text("clock_timestamp()")
+    )
+    reason = mapped_column(Text, nullable=False)
+    cancelled_by = mapped_column(Text, nullable=False)
+    note = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(btrim(reason)) > 0",
+            name="manual_punch_cancellation_reason_recorded",
+        ),
+        CheckConstraint(
+            "length(btrim(cancelled_by)) > 0",
+            name="manual_punch_cancellation_by_recorded",
+        ),
+    )
+
+
+# **A correction is cancelled by a row, never edited and never deleted**
+# (SPEC §3, §13). The database says so, so that it stays true of whatever code
+# is written next.
+#
+# The exception is deliberate and narrow: `attendance_day` and `schedule_id`
+# are *derived* from the schedule in force, and `hr corrections rebuild-days`
+# recomputes them when a schedule is corrected — the same reflex as replaying
+# the parser. Everything a person actually recorded is frozen.
+_append_only(ManualPunch.__table__, """
+CREATE OR REPLACE FUNCTION manual_punch_no_edit() RETURNS trigger AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION USING MESSAGE =
+            'manual_punch row ' || OLD.id || ' cannot be deleted: a correction '
+            'is an act somebody performed. Cancel it with a row '
+            '(SPEC.md 3, 13)';
+    END IF;
+    IF (NEW.employee_id, NEW.path, NEW.recorded_at, NEW.asserted_time,
+        NEW.reason_code, NEW.reason, NEW.made_by, NEW.note)
+       IS DISTINCT FROM
+       (OLD.employee_id, OLD.path, OLD.recorded_at, OLD.asserted_time,
+        OLD.reason_code, OLD.reason, OLD.made_by, OLD.note) THEN
+        RAISE EXCEPTION USING MESSAGE =
+            'manual_punch row ' || OLD.id || ' cannot be edited: punch data is '
+            'never edited and a correction is cancelled by a row '
+            '(SPEC.md 3, 13). Only attendance_day and schedule_id are '
+            'rebuildable';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER manual_punch_no_edit_update BEFORE UPDATE ON manual_punch
+    FOR EACH ROW EXECUTE FUNCTION manual_punch_no_edit();
+CREATE OR REPLACE TRIGGER manual_punch_no_edit_delete BEFORE DELETE ON manual_punch
+    FOR EACH ROW EXECUTE FUNCTION manual_punch_no_edit();
+""")
+
+
+# And the cancellation is a correction too, so it is held to the same rule. A
+# cancellation that could be quietly removed would put the punch back on the
+# record with nothing saying it had ever been off it.
+_append_only(ManualPunchCancellation.__table__, """
+CREATE OR REPLACE FUNCTION manual_punch_cancellation_append_only()
+RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION USING MESSAGE =
+        'manual_punch_cancellation is append-only: a cancellation is a row and '
+        'cannot be edited or deleted (SPEC.md 3, 13). ' || TG_OP ||
+        ' rejected';
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER manual_punch_cancellation_no_update
+    BEFORE UPDATE ON manual_punch_cancellation
+    FOR EACH ROW EXECUTE FUNCTION manual_punch_cancellation_append_only();
+CREATE OR REPLACE TRIGGER manual_punch_cancellation_no_delete
+    BEFORE DELETE ON manual_punch_cancellation
+    FOR EACH ROW EXECUTE FUNCTION manual_punch_cancellation_append_only();
+""")
+
+
+
+
 Index("ix_manual_punch_employee_day", ManualPunch.employee_id, ManualPunch.attendance_day)
 Index("ix_manual_punch_attendance_day", ManualPunch.attendance_day)
 
@@ -886,6 +1019,19 @@ class DailyAttendance(Base):
     # A rising number here is the device retrying, not an employee punching.
     duplicate_pushes = mapped_column(Integer, nullable=False, default=0)
 
+    # How many manual punches on this day were cancelled and so not counted.
+    # **Recorded rather than merely absent**: a punch that leaves no trace when
+    # it is taken out of a figure is indistinguishable from one nobody ever
+    # made, which is the same hole an unmarked manual punch opens (SPEC §3).
+    #
+    # It carries a server default, unlike the counter above it, because it was
+    # added to a table that already had a shape: a row written by any path that
+    # does not name it means "none were cancelled", which is what every row
+    # written before cancellations existed meant.
+    cancelled_punch_count = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+
     # A figure, not a deduction. NULL where there is nothing to measure
     # against — no punch, or a day with no scheduled start (A36).
     late_minutes = mapped_column(Integer)
@@ -927,6 +1073,10 @@ class DailyAttendance(Base):
         ),
         CheckConstraint(
             "duplicate_pushes >= 0", name="daily_attendance_duplicates_positive"
+        ),
+        CheckConstraint(
+            "cancelled_punch_count >= 0",
+            name="daily_attendance_cancelled_positive",
         ),
         # A figure needs the thing it was measured against on the same row.
         CheckConstraint(

@@ -9,7 +9,16 @@ a person could act on.
 Nothing is committed. Every case runs inside a transaction that is rolled back,
 so the gate can be run against a database with the list already loaded.
 
+**It runs against a throwaway database, and has to.** Most cases need a
+`--replace`, which is refused while a leave record, a gate pass or a correction
+exists — and a correction can no longer be cleared out of the way, because the
+database refuses to delete one (SPEC §3, §13). So the run happens on a database
+created for it and dropped at the end: `tools/throwaway.py` starts the same
+image against a scratch database on the compose network, and this file re-runs
+itself inside it. `--inside` is that second run.
+
     uv run python tools/employee_import_gate.py
+    uv run python tools/employee_import_gate.py --inside   # in the container
 
 Exits non-zero if any deliberate mistake was accepted, or if the clean fixture
 was refused.
@@ -127,15 +136,13 @@ class Gate:
                         "days, entered_by) SELECT id, 'ANNUAL', 'AL', "
                         "'2026-08-24', '2026-08-24', 1, 'gate' FROM employee "
                         "LIMIT 1"))
-                else:
-                    # Every other case tests the list itself and starts from a
-                    # database with nothing a person recorded in the way.
-                    # Rolled back like everything else here — including the
-                    # manual punches, which `--replace` refuses to delete and
-                    # §13 forbids deleting anywhere else.
-                    session.execute(text("DELETE FROM gate_pass"))
-                    session.execute(text("DELETE FROM leave_record"))
-                    session.execute(text("DELETE FROM manual_punch"))
+                # Every other case tests the list itself, and needs a
+                # database with nothing a person recorded in the way. **It gets
+                # one by being a throwaway**, not by clearing tables: a leave
+                # record is a form somebody signed, and a correction cannot be
+                # deleted at all — the database refuses it (SPEC §3, §5, §6,
+                # §13). The two cases above make their own row and roll it
+                # back, which is the only way rows get here.
                 session.flush()
                 if preload:
                     run_import(session, FIXTURE,
@@ -419,5 +426,26 @@ def main() -> int:
     return 0
 
 
+def outside() -> int:
+    """Start a throwaway database, and run this gate inside it.
+
+    The same image, on the same compose network, against a database created for
+    this run and dropped when it ends. Its output is passed straight through,
+    so what a reader sees is what the gate printed.
+    """
+    import subprocess
+
+    sys.path.insert(0, str(ROOT))
+    from tools.throwaway import CONTAINER, Throwaway
+
+    with Throwaway() as scratch:
+        scratch.run("hr", "seed", "--add-missing")
+        result = subprocess.run(
+            ["docker", "exec", CONTAINER, "python",
+             "tools/employee_import_gate.py", "--inside"],
+            text=True)
+        return result.returncode
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main() if "--inside" in sys.argv else outside())

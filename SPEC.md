@@ -85,13 +85,21 @@ A missed, failed or wrong punch is corrected by **adding a row to a separate adj
 
 **Accepted residual risk:** a colluding guard can still enter a punch for an absent employee. Software cannot prevent that. But it is attributable to one named person, counted per employee, and cannot be backdated — against a punch card, where the same act is free, invisible and unattributable.
 
-**The guard's screen shows the employee's name back before anything is submitted, and that is the verification.** Nothing else stands between a mistyped number and a punch on somebody else's day: the guard is looking at the person, so the name is the one fact he can check, and it is the largest thing on the screen. It is shown *before* the entry exists, because afterwards is too late — **a confirmed entry cannot be undone**, the screen says so in those words, and HR corrects mistakes.
+**The guard's screen shows the employee's name back before anything is submitted, and that is the verification.** Nothing else stands between a mistyped number and a punch on somebody else's day: the guard is looking at the person, so the name is the one fact he can check, and it is the largest thing on the screen. It is shown *before* the entry exists, because afterwards is too late — **the guard cannot undo a confirmed entry**, the screen says so in those words, and HR corrects mistakes. What HR does is cancel it with a row: the entry stays on the record, marked cancelled, and stops counting (below). There is still nothing that removes it.
 
 **The last step is a dialog, and it names the person again** — "Record a punch for Ravi Tan, 2002?". The page's own button submits nothing: a large button low on a phone screen is easy to press while scrolling, and what it would do cannot be reversed. **The dialog repeats the name and the number rather than asking "are you sure?"**, because a question that carries no fact adds a tap without adding a check. **Cancel holds the focus**: the default answer to a question nobody meant to ask is no.
 
 **Who the guard is comes from a row, not a text box.** §3 requires every manual punch to say who made it; a typed name is attribution that cannot be checked against anything and spells differently every time. The guard picks himself from the list once and the browser remembers it. **This is not a login** — nothing is checked and nothing is secret, and access control stays network position until Milestone 5 (§14).
 
 **A correction lands on an attendance day the same way a punch does** — through the schedule in force, so a night-shift correction after midnight belongs to the shift's day, not the clock's. It is derived, and rebuilt when a schedule is corrected.
+
+**A correction is cancelled by a row, never edited and never deleted.** A wrong correction is not taken back by changing it or removing it: a cancellation is one more row in the adjustment layer, carrying who cancelled it and why, and the original stays exactly as it was written — same time, same reason, same person, same stamp. **The database enforces both halves**: an `UPDATE` that changes anything a person recorded on a manual punch is refused, and so is a `DELETE`. The two derived columns — which attendance day the punch belongs to, and which schedule that came from — stay rebuildable, because they are worked out rather than recorded.
+
+**Cancelling one changes what the figures count and nothing else.** The daily row is rebuilt without it: it is not the first in, not the last out, not in the count. **The row records how many it left out**, and the per-day detail still shows the punch, marked cancelled and saying who cancelled it and why — a punch that disappears from view is indistinguishable from one that never happened, which is the hole this section exists to close.
+
+**Only a correction can be cancelled.** A device punch is a fact from the hardware; nothing in the correction path touches the parsed layer, and the list HR chooses from is read from the correction layer alone.
+
+**One cancellation per correction**, and nothing undoes a cancellation. Cancelling twice is not two facts. What should replace a mistaken cancellation is undecided, and a delete would settle it by accident — the same position taken on undoing a guard entry.
 
 **A correction cannot be deleted, and that binds the employee list too.** Reloading the employee list wholesale is refused while any manual punch exists, the same way it is refused while a leave record or gate pass does (§5, §6) — and for a stronger reason: those are forms that could in principle be typed again, and a correction is an act somebody performed.
 
@@ -613,6 +621,9 @@ So **an outage is not data loss**: the device holds the records and re-pushes th
 |Never|Because|
 |---|---|
 |Editing punch data to fix a bad punch|Corrections are separate rows|
+|Editing or deleting a correction to take it back|**A correction is cancelled by a row** (§3). The original keeps its time, its reason and its author; the database refuses an UPDATE of any of them and refuses a DELETE outright. Only the attendance day and the schedule it was derived from stay rebuildable|
+|Cancelling a device punch|It is a fact from the hardware. Only a correction somebody entered can be cancelled (§3)|
+|Hiding a cancelled punch from the per-day detail|A punch that disappears from view is indistinguishable from one that never happened. It shows as cancelled, and the daily row records how many it left out (§3)|
 |Resolving a device PIN to an employee at capture|Store the string; map downstream|
 |Hand-editing the generated attendance sheet|It cannot then be regenerated|
 |Reading the exported Excel sheet back in|The file goes one way; a returned sheet is a correction in a cell instead of a row|
@@ -637,7 +648,8 @@ So **an outage is not data loss**: the device holds the records and re-pushes th
 |A shared passphrase standing in for accounts on the screens|It is the device's shared password one layer up (§10). Access control is network position until Milestone 5|
 |Serving the device routes and the HR interface on one port|A tunnel to the interface would carry the device routes with it (§14)|
 |A time field on the guard's screen, in its payload, or in the function behind it|A guard who can type a time is a guard who can be asked to type a different one (§3). The server stamps it, and the database refuses a guard row that states one|
-|A way to undo a guard entry|A correction is an act somebody performed. What should replace a wrong one is undecided, and a delete button would settle it by accident (§3, BUILD.md Parked)|
+|A way to undo a guard entry|A correction is an act somebody performed, and it stays on the record. **HR cancels it with a row instead** (§3) — the entry is not removed, not edited, and still shows in the day's detail marked cancelled|
+|A way to undo a cancellation|The same reasoning one level up. What should replace a mistaken one is undecided, and a delete would settle it by accident (§3, BUILD.md Parked)|
 |A screen that works out a figure of its own|It becomes a second place the answer lives, and the screen and the filed record can then disagree (§7). Screens ask; they do not calculate|
 |A serial pattern wide enough to suppress a real device|The unwatched list is the only thing that notices a device nobody added (§9 A50)|
 
