@@ -224,7 +224,7 @@ Every real punch in the capture now parses clean. `raw_request` 96, 109 and 129 
 
 Artifacts received and analysed: daily attendance sheet, late coming summary and deduction record, individual time-off record, time-off salary summary, SQL Account payroll entry screen, **leave card** — HR's per-employee leave ledger, kept by hand and not in the repo, since it carries a real employee's name and join date. What it settled is in SPEC §6 and §2.
 
-**Leave application form** — the two leave vocabularies and the approval chain, SPEC §6. **Gate pass** — category, destination, out and in times, four signatures, and who fills the times, SPEC §5. Both were photographed blank, with no employee data on them, and **the photographs are not in the repo**: they are not source, and what they settled is in SPEC.
+**Leave application form** — the two leave vocabularies, the form's own field order, and **five signature boxes** including the Operation Manager, SPEC §6. **Gate pass** — category, destination, out and in times, **four** signatures and no department at all, SPEC §5. **The two forms do not carry the same chain**, which SPEC §6 once said they did. Both were photographed blank, with no employee data on them, and **the photographs are not in the repo**: they are not source, and what they settled is in SPEC.
 
 **Most of the protocol contract is now observed, and the second capture is the one that is kept** — see SPEC.md §12, where each line says what was seen and what was not. The simulator still only tests that the receiver behaves as the contract says, not that the contract is right; what changed is that its shapes are now copied from real bytes rather than from documentation.
 
@@ -367,6 +367,7 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |Are numbers reused after someone leaves?|HR|Employees|
 |What employee groups exist, and does the group decide shift and break?|HR|Schedule|
 |Half-day marks — which leave types can be half days?|HR|Leave|
+|**Is `AL` for Annual, `MC` for Sick and `UL` for Unpaid what HR actually writes on the sheet** (SPEC §9 A48)? Leave entry suggests those three and offers nothing for the other four form types, because the legend has no code for them. It is a convenience on the screen, not a mapping — HR corrects it when they see it|HR|Nothing — the row records what HR typed|
 |Is there one leave card per leave type per employee, or one card covering all types? The card has no type column|HR|Nothing structural|
 |**What is the note in the top-left of the attendance sheet** (SPEC §9 A41)? A close-up photo may answer the schedule question. The sheet renders the cell empty and marked unread until it is read|HR|The sheet's top-left cell only|
 |**How many pages is the sheet, and what is headcount** (SPEC §9 A39)? 30 rows to a page is the assumption the renderer uses|HR|Page breaks on the printed sheet|

@@ -46,7 +46,7 @@ Today both HR and Accounts read the same punch card, at different times and at d
 - **Employees are created in the application and pushed to the device**, never typed on the device.
 - Schedules and employment status are **effective-dated**. Re-rendering a past period uses the schedule and headcount that were in force then, not today's.
 - **The leave card's and the leave application form's "Department" is the attendance sheet's Section.** One field, under two names on three pieces of paper — not a second attribute.
-- **"Staff number" on the leave application form and the gate pass is the employee number.** Same field, another name.
+- **The employee number goes by three names on the paper.** The leave application form calls it **Staff no.**; the gate pass carries **no. pekerja** on its name line and **Emp no.** as a field of its own (§5). One field, three labels — not three attributes.
 
 ---
 
@@ -156,14 +156,20 @@ Public holidays and rest days shade whole columns on the sheet, driven by the ca
 
 ### Time off
 
-The gate pass carries: employee name, staff number, department, date, a category tick, destination, reason, out time, in time, and four signatures.
+The gate pass carries, as the form has it:
 
 |Field|Notes|
 |---|---|
-|Category|One tick of four — **Official · Personal · Medical Treatment · Others**|
-|Destination|Where the employee is going|
+|Name / no. pekerja|One line on the form|
+|Emp no.|**A separate field of its own**, beside the name line|
+|Date||
 |Out time, in time|Written on the paper form; the hours follow from them|
-|Signatures|**Four, not one** — applicant, immediate supervisor, Head of Dept, HR. The same chain as leave, and it does not differ by category (§6)|
+|Category|One tick of four — **Official · Personal · Medical Treatment · Others**|
+|Reason|Why, in words|
+|Destination|Where the employee is going|
+|Signatures|**Four** — applicant, verified by the immediate supervisor, approved by the Head of Dept, reviewed by HR Dept|
+
+**There is no department on the gate pass.** The leave application form and the leave card have one (§2, §6); this form does not, and the employee's section is looked up rather than transcribed.
 
 - **Hours are not written on the gate pass.** Out time and in time are, and the hours are computed from the pair. This is the reverse of leave, where the number of days is written on the form and is stored as given, never recomputed (§6).
 - **The out and in times are the guard's on paper and HR's in the system.** The guard fills them in at the gate on the paper form; HR types both when the form is entered. **This is not the guard entry path in §3** — that path corrects a failed biometric punch, is server-stamped, and has no field for a typed time. Two different acts: a gate pass time is HR transcribing an authorised absence off paper, a guard entry is a punch standing in for one the device did not take.
@@ -207,17 +213,32 @@ Cut-offs stated on the sheet: time off and late coming close on the 10th, salary
 
 ### Applied for — the leave application form
 
+**Nature of leave is one tick**, in the form's own order:
+
 |Type on the form|Notes|
 |---|---|
-|Annual Leave||
-|Sick Leave|Sick certificate attached|
-|Compassionate Leave||
+|Annual||
+|Compassionate||
 |Hospitalization||
-|Ind. Accident Leave (SOCSO)||
-|Maternity Leave||
-|Unpaid Leave|Reason required|
+|Ind. Accident (SOCSO)||
+|Sick|Sick certificate attached|
+|Maternity||
+|Unpaid Leave|**Carries a Reason of its own** on the form, unlike the six ticks above|
 
-The form also carries: staff number, department, date of application, period from, period to, number of days, and the applicant's signature.
+The rest of the form, as it is laid out:
+
+|Field|Notes|
+|---|---|
+|Name of applicant||
+|Staff no.||
+|Department|The attendance sheet's Section (§2)|
+|Date|When the form is made out — the date of application|
+|Period from, to||
+|No. of days|Stated on the form, and stored as stated (below)|
+|Signature of applicant||
+|Verified by|Immediate Supervisor|
+|Approved by|Head of Dept|
+|**For office use only**|**Human Resource Dept, with a date of its own** — and **Operation Manager**|
 
 **Policy stated on the form itself:**
 
@@ -242,14 +263,20 @@ These are the factory's rules, printed where the employee signs. Nothing in the 
 
 **The two lists do not line up, and that is a fact about the paper, not an open question:**
 
-- **Compassionate Leave, Hospitalization, Ind. Accident Leave (SOCSO) and Maternity Leave have no legend code.** They are applied for and the legend has no letter for them.
+- **Compassionate, Hospitalization, Ind. Accident (SOCSO) and Maternity have no legend code.** They are ticks on the form and the legend has no letter for them.
 - **EL — emergency leave — has no box on the form.** HR writes it on the sheet; nobody applies for it under that name.
 
 Either field on a leave record can therefore be empty: a form type with no code, or a code HR wrote with no form behind it. **Filling one in from the other would be inventing a mapping that the paper does not contain.**
 
 ### Approval
 
-**Applicant signs, immediate supervisor verifies, Head of Dept approves, HR reviews.** One chain, and **it does not differ by leave type** — the leave application form and the gate pass (§5) carry the same four signatures whatever the type or category. **Milestone 1 is HR typing a form that has already been signed on paper.** Recording who signed, and routing an approval to a person, are both Milestone 5.
+**Five signature boxes on the leave form:** the applicant signs, the immediate supervisor verifies, the Head of Dept approves, and then the office-use block carries **Human Resource Dept with a date of its own** and **Operation Manager** beside it.
+
+**The two forms do not carry the same chain, and an earlier version of this section said they did.** The gate pass has **four** — applicant, supervisor, Head of Dept, HR (§5). The leave form has **five**, because the Operation Manager signs it and does not sign a gate pass. **Leaving the factory for an afternoon and taking leave are not authorised by the same people**, and a system that stored one chain for both would have to invent a signature or drop one.
+
+**Within each form the chain does not differ**: no leave type routes differently, and no gate pass category routes differently.
+
+**Milestone 1 is HR typing a form that has already been signed on paper.** Recording who signed, and routing an approval to a person, are both Milestone 5.
 
 ### Other rules
 
@@ -339,10 +366,13 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A45|**A serial on the allowlist that has never been heard from is not an outage.** It starts being watched at its first request|
 |A46|**A queued command is handed to the device as `C:{id}:{CMD}`, one per poll**, and the device acts on it. From the protocol document; no command has ever been sent to this device|
 |A47|**The device reports the result as `ID={id}&Return={code}&CMD={command}`**, with `Return=0` meaning success, posted to `/iclock/devicecmd`. Same document, same lack of evidence|
+|A48|**Leave entry offers a sheet code beside the applied-for type** — Annual Leave `AL`, Sick Leave `MC`, Unpaid Leave `UL` — as a convenience on the screen. The other four form types are offered no code, because the legend has none|
 
 **Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 is isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
 
 **A21 — "the device pushes the PIN with leading zeros intact" — is answered and gone.** The question never arises: the device refuses to accept a leading zero in a user ID at all (§10). The mapping absorbed it with no code change, which is what §13's rule against resolving a PIN at capture was for.
+
+A48 is the only assumption on the leave entry screen, and it is a suggestion rather than a rule. **§6 settles that the applied-for type and the sheet code are two fields and that neither is derived from the other**, and four form types have no legend code at all — so this is what the screen fills in for HR before they touch it, not a mapping the system believes. **HR overrides it by typing something else, and the row records what they typed.** Three of the seven types happen to have an obvious code; the others are left empty and stay empty until somebody who writes the sheet says otherwise.
 
 A46 and A47 are the command queue's, and they are the only two assumptions in this system that **nothing has ever tested against the hardware** — not even once, the way A26 was tested by a handshake and A27 was not. The simulator exercises what the document says, which proves the receiver consistent with the document and says nothing about the firmware. **The factory test is one `REBOOT`**, and what it settles is listed in BUILD.md.
 
