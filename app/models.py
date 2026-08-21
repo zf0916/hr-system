@@ -662,6 +662,39 @@ class SiteSetting(Base):
     note = mapped_column(Text)
 
 
+class ScreenUser(Base):
+    """Who is at the keyboard, as rows.
+
+    **This is attribution, not a login.** There are no accounts before
+    Milestone 5 and this is not one: nothing is checked, nothing is secret, and
+    access control stays network position (SPEC §13, §14). What it replaces is a
+    free-text name box — SPEC §3 requires every manual punch to say who made
+    it, and a typed name is attribution that cannot be checked against
+    anything, spells differently every time, and is one distracted moment from
+    being somebody else's.
+
+    `provisional` marks a name nobody has read off a roster yet. The same
+    reflex as the sheet's unread top-left note: stand in for it and say so,
+    rather than inventing a person and letting the invention harden.
+    """
+
+    __tablename__ = "screen_user"
+
+    code = mapped_column(Text, primary_key=True)
+    name = mapped_column(Text, nullable=False)
+    screen = mapped_column(Text, nullable=False)  # 'guard' or 'hr'
+    label = mapped_column(Text)  # what they do, shown beside the name
+    sort_order = mapped_column(Integer, nullable=False, default=0)
+    active = mapped_column(Boolean, nullable=False, default=True)
+    provisional = mapped_column(Boolean, nullable=False, default=False)
+    note = mapped_column(Text)
+
+    __table_args__ = (
+        CheckConstraint("screen IN ('guard', 'hr')", name="screen_user_screen_known"),
+        CheckConstraint("length(btrim(name)) > 0", name="screen_user_name_recorded"),
+    )
+
+
 class CorrectionReason(Base):
     """The reasons each path may give (SPEC §3).
 

@@ -24,6 +24,7 @@ from app.models import (
     ParserSetting,
     Role,
     Section,
+    ScreenUser,
     SheetSetting,
     SiteSetting,
 )
@@ -313,53 +314,111 @@ GATE_PASS_CATEGORIES = [
 ]
 
 
-def seed(session) -> None:
-    # The states first: a device row carries a foreign key to one, so seeding a
-    # device before them fails on the constraint rather than silently.
-    for code, label, alerted, note in DEVICE_STATES:
-        session.add(DeviceState(code=code, label=label, alerted=alerted,
-                                note=note))
-    session.flush()
+SCREEN_USERS = [
+    # A51 — the guard roster has never been read. These stand in for real
+    # names so the screen works, and they say so on the screen itself; they are
+    # replaced by an UPDATE when somebody reads the roster, not corrected.
+    ("guard-1", "Guard 1", "guard", "on duty at the guard house", 1, True,
+     "A51 — placeholder. The guard roster is unread (BUILD.md, Parked)"),
+    ("guard-2", "Guard 2", "guard", "on duty at the guard house", 2, True,
+     "A51 — placeholder. The guard roster is unread (BUILD.md, Parked)"),
+]
 
-    for serial, label, note in DEVICES:
-        session.add(Device(serial_number=serial, label=label, note=note))
-    for order, (key, value, note) in enumerate(DEVICE_OPTIONS):
-        session.add(
-            DeviceOption(
-                serial_number=None, key=key, value=value, sort_order=order, note=note
-            )
-        )
-    for key, value, note in PARSER_SETTINGS:
-        session.add(ParserSetting(key=key, value=value, note=note))
-    for name in SECTIONS:
-        session.add(Section(code=name, label=name, note="SPEC §2"))
-    for name in ROLES:
-        session.add(Role(code=name, label=name, note="SPEC §2, sheet legend"))
-    for key, value, note in EMPLOYEE_NUMBER_RULE:
-        session.add(EmployeeNumberRule(key=key, value=value, note=note))
-    for code, label, note in HOLIDAY_SCOPES:
-        session.add(HolidayScope(code=code, label=label, note=note))
-    for key, value, note in SITE_SETTINGS:
-        session.add(SiteSetting(key=key, value=value, note=note))
-    for code, label, path, note in CORRECTION_REASONS:
-        session.add(CorrectionReason(code=code, label=label, path=path, note=note))
-    for code, label, note in LEAVE_CODES:
-        session.add(LeaveCode(code=code, label=label, note=note))
-    session.flush()
-    for code, label, order, suggested, reason_required, note in LEAVE_TYPES:
-        session.add(LeaveType(code=code, label=label, sort_order=order,
-                              suggested_sheet_code=suggested,
-                              reason_required=reason_required, note=note))
-    for code, label, order, note in GATE_PASS_CATEGORIES:
-        session.add(GatePassCategory(code=code, label=label, sort_order=order,
-                                     note=note))
-    for code, label, note in ATTENDANCE_STATUSES:
-        session.add(AttendanceStatus(code=code, label=label, note=note))
-    for key, value, note in SHEET_SETTINGS:
-        session.add(SheetSetting(key=key, value=value, note=note))
-    for key, value, note in ALERT_SETTINGS:
-        session.add(AlertSetting(key=key, value=value, note=note))
-    for code, command_text, label, note in DEVICE_COMMAND_TYPES:
-        session.add(DeviceCommandType(code=code, command_text=command_text,
-                                      label=label, note=note))
+
+def _rows() -> list:
+    """Every seeded table, in the order the foreign keys need.
+
+    One entry per table, so that adding a table later can seed just that table
+    without dropping the database — which now holds forms somebody typed off
+    paper and nothing can rebuild (CLAUDE.md).
+    """
+    return [
+        # The states first: a device row carries a foreign key to one, so
+        # seeding a device before them fails on the constraint rather than
+        # silently.
+        (DeviceState, lambda: [
+            DeviceState(code=code, label=label, alerted=alerted, note=note)
+            for code, label, alerted, note in DEVICE_STATES]),
+        (Device, lambda: [
+            Device(serial_number=serial, label=label, note=note)
+            for serial, label, note in DEVICES]),
+        (DeviceOption, lambda: [
+            DeviceOption(serial_number=None, key=key, value=value,
+                         sort_order=order, note=note)
+            for order, (key, value, note) in enumerate(DEVICE_OPTIONS)]),
+        (ParserSetting, lambda: [
+            ParserSetting(key=key, value=value, note=note)
+            for key, value, note in PARSER_SETTINGS]),
+        (Section, lambda: [
+            Section(code=name, label=name, note="SPEC §2") for name in SECTIONS]),
+        (Role, lambda: [
+            Role(code=name, label=name, note="SPEC §2, sheet legend")
+            for name in ROLES]),
+        (EmployeeNumberRule, lambda: [
+            EmployeeNumberRule(key=key, value=value, note=note)
+            for key, value, note in EMPLOYEE_NUMBER_RULE]),
+        (HolidayScope, lambda: [
+            HolidayScope(code=code, label=label, note=note)
+            for code, label, note in HOLIDAY_SCOPES]),
+        (SiteSetting, lambda: [
+            SiteSetting(key=key, value=value, note=note)
+            for key, value, note in SITE_SETTINGS]),
+        (CorrectionReason, lambda: [
+            CorrectionReason(code=code, label=label, path=path, note=note)
+            for code, label, path, note in CORRECTION_REASONS]),
+        (ScreenUser, lambda: [
+            ScreenUser(code=code, name=name, screen=screen, label=label,
+                       sort_order=order, active=True, provisional=provisional,
+                       note=note)
+            for code, name, screen, label, order, provisional, note
+            in SCREEN_USERS]),
+        (LeaveCode, lambda: [
+            LeaveCode(code=code, label=label, note=note)
+            for code, label, note in LEAVE_CODES]),
+        (LeaveType, lambda: [
+            LeaveType(code=code, label=label, sort_order=order,
+                      suggested_sheet_code=suggested,
+                      reason_required=reason_required, note=note)
+            for code, label, order, suggested, reason_required, note
+            in LEAVE_TYPES]),
+        (GatePassCategory, lambda: [
+            GatePassCategory(code=code, label=label, sort_order=order, note=note)
+            for code, label, order, note in GATE_PASS_CATEGORIES]),
+        (AttendanceStatus, lambda: [
+            AttendanceStatus(code=code, label=label, note=note)
+            for code, label, note in ATTENDANCE_STATUSES]),
+        (SheetSetting, lambda: [
+            SheetSetting(key=key, value=value, note=note)
+            for key, value, note in SHEET_SETTINGS]),
+        (AlertSetting, lambda: [
+            AlertSetting(key=key, value=value, note=note)
+            for key, value, note in ALERT_SETTINGS]),
+        (DeviceCommandType, lambda: [
+            DeviceCommandType(code=code, command_text=command_text,
+                              label=label, note=note)
+            for code, command_text, label, note in DEVICE_COMMAND_TYPES]),
+    ]
+
+
+def seed(session, only_empty: bool = False) -> list[str]:
+    """Write the rows. Returns the tables it filled.
+
+    `only_empty` skips any table that already has a row in it. **It never
+    updates and never deletes**: a row HR has corrected is HR's, and a seed
+    that overwrote it would quietly undo the correction. That is what makes
+    adding a table safe now that the database holds leave records and gate
+    passes typed off paper.
+    """
+    from sqlalchemy import func, select
+
+    filled: list[str] = []
+    for model, build in _rows():
+        if only_empty and session.scalar(
+                select(func.count()).select_from(model)):
+            continue
+        for row in build():
+            session.add(row)
+        session.flush()
+        filled.append(model.__tablename__)
     session.commit()
+    return filled

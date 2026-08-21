@@ -30,10 +30,11 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Response
+from pydantic import BaseModel, ConfigDict
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import screens
+from app import guard, screens
 from app.db import Session, database_state
 
 # Where the Dockerfile's build stage leaves the compiled interface. On a
@@ -54,6 +55,40 @@ def _read(function, session, **arguments):
         return function(session, **arguments)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class GuardEntry(BaseModel):
+    """What the guard screen may send, exhaustively.
+
+    `extra="forbid"` is the point: a field this model does not name is a `422`,
+    not a value quietly ignored. **There is no time field, and a request that
+    invents one is refused rather than accepted-and-dropped** — a payload that
+    silently discards what it was sent is a payload nobody can reason about
+    (SPEC §3, §13).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    guard_code: str
+    employee_number: str
+    reason_code: str
+
+
+def _write(function, session, **arguments):
+    """Call one screen function that writes, and commit it.
+
+    **The commit lives here, not in the service function.** A service function
+    that committed could not be rolled back by whoever called it — which is
+    how a gate claiming to roll back leaves a real row behind every time it
+    runs (CLAUDE.md).
+    """
+    try:
+        result = function(session, **arguments)
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return result
 
 
 def create_hr_app() -> FastAPI:
@@ -127,6 +162,34 @@ def create_hr_app() -> FastAPI:
             return JSONResponse(_read(
                 screens.day_detail, session, employee_number=employee_number,
                 month=month, start=start, end=end, with_punches=punches))
+
+    # ---- the guard screen (piece 3) --------------------------------------
+
+    @app.get("/api/guard/screen")
+    def guard_screen():
+        """Who may be on duty, and the two reasons. Both are rows."""
+        with Session() as session:
+            return JSONResponse(_read(guard.screen, session))
+
+    @app.get("/api/guard/employee/{employee_number}")
+    def guard_look_up(employee_number: str):
+        """The name behind a number, for the guard to read back before he
+        confirms. A number that resolves to nobody is refused here."""
+        with Session() as session:
+            return JSONResponse(_read(guard.look_up, session,
+                                      employee_number=employee_number))
+
+    @app.post("/api/guard/entry")
+    def guard_entry(entry: GuardEntry):
+        """**The whole payload is three names.** `GuardEntry` forbids anything
+        else, so a crafted request carrying a time is refused before it reaches
+        the service layer — which has no parameter for one either, above a
+        check constraint that refuses a guard row that states one (SPEC §3)."""
+        with Session() as session:
+            return JSONResponse(_write(
+                guard.record, session, guard_code=entry.guard_code,
+                employee_number=entry.employee_number,
+                reason_code=entry.reason_code))
 
     @app.api_route(
         "/iclock/{rest:path}",

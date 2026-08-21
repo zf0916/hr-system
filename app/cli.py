@@ -55,6 +55,21 @@ from app.seed import seed as seed_rows
 
 
 def cmd_seed(args) -> int:
+    # **Adding a table is not dropping the database.** There are still no
+    # migrations, and the model is still the only source — but the database now
+    # holds leave records and gate passes typed off paper, and nothing can
+    # rebuild those. `--add-missing` creates the tables the model has and the
+    # database does not, and seeds only tables that are empty. It never drops,
+    # never updates and never deletes (CLAUDE.md).
+    if args.add_missing:
+        Base.metadata.create_all(engine)
+        with Session() as session:
+            filled = seed_rows(session, only_empty=True)
+        print(f"schema brought up to the model at {_dsn()}")
+        print("filled: " + (", ".join(filled) if filled else "nothing — every "
+                            "seeded table already had rows"))
+        return 0
+
     with Session() as session:
         captured = 0
         try:
@@ -406,6 +421,12 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_seed = sub.add_parser("seed", help="drop, recreate and seed the database")
+    p_seed.add_argument(
+        "--add-missing",
+        action="store_true",
+        help="create tables the model has and the database does not, and seed "
+             "only the empty ones. Drops nothing",
+    )
     p_seed.add_argument(
         "--force",
         action="store_true",

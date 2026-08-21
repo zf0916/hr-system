@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react'
 import Employees from './screens/Employees.jsx'
 import Sheet from './screens/Sheet.jsx'
 import Detail from './screens/Detail.jsx'
+import Guard from './screens/Guard.jsx'
 
 function useRoute() {
   const [route, setRoute] = useState(() => window.location.pathname + window.location.search)
@@ -53,6 +54,13 @@ function NavLink({ to, current, go, children }) {
 export default function App() {
   const [route, go] = useRoute()
   const [path, search] = [route.split('?')[0], route.includes('?') ? `?${route.split('?')[1]}` : '']
+
+  // The guard's screen is not part of the HR interface and does not wear its
+  // chrome: a different person, a different place, a phone rather than a desk.
+  // It shares the port because it shares the LAN (SPEC §14).
+  if (path === '/guard') {
+    return <Guard search={search} go={go} />
+  }
 
   let screen
   if (path === '/sheet') {

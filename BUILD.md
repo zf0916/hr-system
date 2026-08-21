@@ -85,7 +85,21 @@ What it produces across the 54 employees who have a PIN: two punches on most wor
 
 `tools/serving_gate.py` is 31 checks, and it asks both ports the way a device and a browser would. Broken on purpose, two ways: **mounting the receiver into the HR app and removing the refusal** put a live handshake on the tunnel's port — `GET OPTION FROM: GATE` — and six checks failed; **mounting it while leaving the refusal in front of it** answers `404` correctly and is still caught, because the interface must not so much as import the receiver. An app that imports it is one reordering away from serving it.
 
-The seven pieces, in order: **1 serving shape** · **2 read-only screens** · 3 the guard screen · 4 leave entry · 5 gate pass entry · 6 HR corrections · 7 the demo pass.
+The seven pieces, in order: **1 serving shape** · **2 read-only screens** · **3 the guard screen** · 4 leave entry · 5 gate pass entry · 6 HR corrections · 7 the demo pass.
+
+**Step 10, piece 3 is built: the guard screen.** One page at `/guard`, on a phone, on the factory Wi-Fi by LAN address. It carries none of the HR interface's chrome and reaches none of its screens. Four steps: who is on duty, which employee, why, confirm — then the server stamps the time.
+
+**The name showing back is the whole safeguard**, so it is the largest thing on the screen. The confirm step lives at `/guard?employee=0090`, which means the phone's Back button undoes a mistyped number — the correction that has to be easy, because the one after confirming does not exist. The page says in those words that a confirmed entry cannot be undone and that HR fixes mistakes. **No void path was built**; that question is still parked for piece 6.
+
+**No time, at four depths.** There is no time control on the page; the request model declares three fields and `forbid`s a fourth, so a crafted payload is a `422` rather than a value quietly dropped; `guard.record` and `record_guard_entry` have no parameter for one; and `manual_punch_guard_cannot_state_a_time` refuses the row underneath all of it.
+
+**Who the guard is comes from a row.** New table `screen_user` — attribution, not a login. The two seeded guards are **placeholders marked provisional** and the screen says so, because nobody has read the roster (A51). Adding that table needed `hr seed --add-missing`: it creates tables the model has and the database does not, and seeds only tables that are empty. **It never drops, never updates, never deletes** — which matters now that the database holds leave records, gate passes and corrections that nothing can rebuild.
+
+**`tools/guard_gate.py` is 64 checks**, and it reads all three steps of the page out of a browser at phone width. Broken on purpose, four ways: **a `type="time"` box added to the confirm step** was caught in the DOM; **a payload that accepted `asserted_time` and passed it all the way down** failed nine checks and was refused at the bottom by the constraint the CLI hits; **removing the reason check** let an HR-path reason through and turned an unknown reason into a `500` instead of a refusal; **making an unknown employee number fall back to the first employee on file** wrote three punches against the wrong person, which is exactly the failure the check exists to prevent.
+
+**Two of those breaks wrote real rows, and that is the lesson.** A deliberate mistake on a *write* path costs rows on the working database, and they had to be deleted afterwards — which §13 otherwise forbids. Worse, the gate itself had been writing one on every run: `guard.record` committed, so the `session.rollback()` under it did nothing. **The commit moved to the caller**, and the gate now ends by checking that `manual_punch` is exactly the size it was when it started. Nine phantom guard entries against employee `0090`, attributed to a guard who was not there, were removed. One deliberate demonstration entry remains.
+
+**A real correction also exposed a hole in the importer.** `--replace` counted leave records and gate passes but not manual punches, so with a guard entry on file it did not refuse — it reached the `DELETE` and died on a foreign key. It refuses by name now, and the import gate proves it.
 
 **Step 10, piece 2 is built: the read-only screens.** The employee list on a date, the sheet, one employee's period in detail, and the Excel download. **Nothing in this piece writes.** Three screens and one file, and every one of them is a face on a function `hr` already calls: `app/screens.py` is the only part of the application the HTTP layer imports, and it hands back finished answers.
 
@@ -257,6 +271,11 @@ Run it:
     hr raw --limit 20                         # what arrived, when, from which
     hr raw --serial PYA8262300072 --body      #   serial, which table, and the
     hr raw --id 26                            #   bytes. It parses nothing
+
+    http://<server>:8090/guard              # the guard's phone, on the LAN
+    uv run python tools/guard_gate.py       # 64 checks; reads the page at phone width
+
+    hr seed --add-missing                   # a new table, without dropping anything
 
     hr corrections guard --employee 0090 --reason biometric_failed --by "Guard: ..."
     hr corrections retroactive --employee 0090 --at "2026-08-17 08:05:00" \
@@ -442,7 +461,8 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**Which group runs which shift** (SPEC §9 A31)? The seeded schedules are provisional and marked so in the database|HR|Schedule|
 |**The group codes themselves are invented.** DAY-PROD, NIGHT-PROD and OFFICE came from the sample spreadsheet, not from HR — they are replaced by whatever the real employee list carries, not corrected|HR|Schedule|
 |**How is a mistaken correction undone?** A guard entry made for the wrong employee cannot be edited or deleted, and SPEC §3 does not say what should replace it|HR, then management|Corrections|
-|**What happens when the guard confirms the wrong employee?** The screen shows the name back before he confirms, and the row is still un-removable once made (SPEC §3). It blocks nothing before piece 6, and piece 6 is where it has to be answered|Management, then HR|Step 10, piece 6|
+|**What happens when the guard confirms the wrong employee?** The screen shows the name back before he confirms — built, and the largest thing on it — and the row is still un-removable once made (SPEC §3). **No void path exists.** Piece 6 is where it has to be answered|Management, then HR|Step 10, piece 6|
+|**Who is on the guard roster?** `screen_user` holds two placeholders marked provisional, and the guard screen says so on its face (SPEC §9 A51). Replaced by an UPDATE, not corrected|HR|Nothing — they are rows|
 |**How often does a missed punch actually happen?** It decides whether a signed slip is a formality or whether the real question is enrollment quality|HR|The correction evidence decision|
 |**When is the Excel sheet printed and filed?** Monthly on a period boundary is the assumption. Does not block the build|HR|Nothing structural|
 |**How long may the device be silent before somebody should be told** (SPEC §9 A43)? 15 minutes is the assumption, against a device that polls every 10 seconds|Zi Fong, then HR|Nothing — it is a row|

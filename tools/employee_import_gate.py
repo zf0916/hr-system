@@ -102,7 +102,17 @@ class Gate:
         mapping = write_mapping(workdir / f"{label}.toml", top, columns)
         with Session() as session:
             try:
-                if keep_hr_entry:
+                if keep_hr_entry == "guard":
+                    # A guard entry is not a typed form, and is refused for a
+                    # stronger reason: §13 forbids deleting a correction at
+                    # all. Before this was checked, `--replace` did not refuse
+                    # — it reached the DELETE and died on a foreign key.
+                    session.execute(text(
+                        "INSERT INTO manual_punch (employee_id, path, "
+                        "attendance_day, reason_code, made_by) SELECT id, "
+                        "'guard', '2026-08-21', 'biometric_failed', 'gate' "
+                        "FROM employee LIMIT 1"))
+                elif keep_hr_entry:
                     # The case that proves a --replace is refused while HR
                     # entry exists needs one leave record to exist. It makes
                     # its own, here, inside the transaction that is rolled
@@ -119,10 +129,13 @@ class Gate:
                         "LIMIT 1"))
                 else:
                     # Every other case tests the list itself and starts from a
-                    # database with no HR entry in the way. Rolled back like
-                    # everything else here.
+                    # database with nothing a person recorded in the way.
+                    # Rolled back like everything else here — including the
+                    # manual punches, which `--replace` refuses to delete and
+                    # §13 forbids deleting anywhere else.
                     session.execute(text("DELETE FROM gate_pass"))
                     session.execute(text("DELETE FROM leave_record"))
+                    session.execute(text("DELETE FROM manual_punch"))
                 session.flush()
                 if preload:
                     run_import(session, FIXTURE,
@@ -343,6 +356,12 @@ def main() -> int:
             work, "--replace is refused while HR entry exists",
             expected="cannot be rebuilt from anything",
             keep_hr_entry=True)
+        # The same import, with the leave record out of the way: it is the
+        # HR entry that refuses it, not anything about the list.
+        gate.must_fail(
+            work, "and refused while a guard's correction exists, by name",
+            expected="manual_punch",
+            keep_hr_entry="guard")
         # The same import, with the leave record out of the way: it is the
         # HR entry that refuses it, not anything about the list.
         gate.must_pass(

@@ -40,6 +40,7 @@ from app.models import (
     EmployeeNumberKey,
     EmployeeNumberRule,
     EmploymentPeriod,
+    ManualPunch,
     Role,
     Section,
 )
@@ -432,17 +433,20 @@ def run_import(session, source: Path, mapping_path: Path, *, replace: bool,
         workbook.close()
 
     if replace:
-        # **HR entry is not derivable and is never cleared with the list.**
-        # Daily attendance goes because it is rebuilt from punches; a leave
-        # record and a gate pass are forms somebody typed off paper, and
-        # deleting the employee they hang on would take them with it. Once HR
-        # has typed anything, the list is corrected in place rather than
-        # replaced wholesale (SPEC §5, §6).
+        # **What a person recorded is not derivable and is never cleared with
+        # the list.** Daily attendance goes because it is rebuilt from punches.
+        # A leave record and a gate pass are forms somebody typed off paper; a
+        # manual punch is a correction somebody made, and §13 forbids deleting
+        # one at all. Deleting the employee they hang on would take them with
+        # it — so once any of them exists, the list is corrected in place
+        # rather than replaced wholesale (SPEC §3, §5, §6, §13).
         typed = {
             "leave_record": session.scalar(
                 select(func.count()).select_from(LeaveRecord)) or 0,
             "gate_pass": session.scalar(
                 select(func.count()).select_from(GatePass)) or 0,
+            "manual_punch": session.scalar(
+                select(func.count()).select_from(ManualPunch)) or 0,
         }
         if any(typed.values()):
             counted = ", ".join(f"{count} {name}" for name, count in typed.items()
@@ -450,8 +454,8 @@ def run_import(session, source: Path, mapping_path: Path, *, replace: bool,
             result.problems.append(RowProblem(
                 None, "--replace",
                 f"{counted} recorded against the employees now loaded. "
-                "--replace deletes employees, and HR typed those forms off "
-                "paper — they cannot be rebuilt from anything. Load without "
+                "--replace deletes employees, and a person recorded each of "
+                "those — they cannot be rebuilt from anything. Load without "
                 "--replace, or decide what should happen to them first",
             ))
             return result

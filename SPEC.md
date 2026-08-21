@@ -85,7 +85,13 @@ A missed, failed or wrong punch is corrected by **adding a row to a separate adj
 
 **Accepted residual risk:** a colluding guard can still enter a punch for an absent employee. Software cannot prevent that. But it is attributable to one named person, counted per employee, and cannot be backdated — against a punch card, where the same act is free, invisible and unattributable.
 
+**The guard's screen shows the employee's name back before anything is submitted, and that is the verification.** Nothing else stands between a mistyped number and a punch on somebody else's day: the guard is looking at the person, so the name is the one fact he can check, and it is the largest thing on the screen. It is shown *before* the entry exists, because afterwards is too late — **a confirmed entry cannot be undone**, the screen says so in those words, and HR corrects mistakes.
+
+**Who the guard is comes from a row, not a text box.** §3 requires every manual punch to say who made it; a typed name is attribution that cannot be checked against anything and spells differently every time. The guard picks himself from the list once and the browser remembers it. **This is not a login** — nothing is checked and nothing is secret, and access control stays network position until Milestone 5 (§14).
+
 **A correction lands on an attendance day the same way a punch does** — through the schedule in force, so a night-shift correction after midnight belongs to the shift's day, not the clock's. It is derived, and rebuilt when a schedule is corrected.
+
+**A correction cannot be deleted, and that binds the employee list too.** Reloading the employee list wholesale is refused while any manual punch exists, the same way it is refused while a leave record or gate pass does (§5, §6) — and for a stronger reason: those are forms that could in principle be typed again, and a correction is an act somebody performed.
 
 **Every manual punch is marked on the generated sheet and counted per employee per period.** An unmarked manual punch is indistinguishable from a biometric one and recreates the hole the device exists to close. **A rising count for one employee means a bad enrollment or a process being worked around** — both need acting on.
 
@@ -383,11 +389,14 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A47|**The device reports the result as `ID={id}&Return={code}&CMD={command}`**, with `Return=0` meaning success, posted to `/iclock/devicecmd`. Same document, same lack of evidence|
 |A48|**Leave entry offers a sheet code beside the applied-for type** — Annual Leave `AL`, Sick Leave `MC`, Unpaid Leave `UL` — as a convenience on the screen. The other four form types are offered no code, because the legend has none|
 |A49|**A day with leave shows its sheet code in the cell.** Where the record has no code, the cell shows what the punches say instead of a letter, and the day's fraction is not shown on the sheet at all|
+|A51|**The guard roster is unread.** `screen_user` holds two placeholder guards, marked provisional, and the screen says on its face that the names are placeholders|
 |A50|**A serial beginning `GATE-` was invented by a gate or a fixture, not by a device.** Four bare names — `GATE`, `TEST`, `CHECK`, `NOTALLOWLISTED9` — are older than that convention and are permanent in the append-only raw layer, so the row names them too|
 
 **Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 is isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
 
 **A21 — "the device pushes the PIN with leading zeros intact" — is answered and gone.** The question never arises: the device refuses to accept a leading zero in a user ID at all (§10). The mapping absorbed it with no code change, which is what §13's rule against resolving a PIN at capture was for.
+
+A51 is the same reflex as the sheet's unread top-left note (A41): the screen needs somebody to attribute an entry to, nobody has read the guard roster, and inventing two plausible names would put invented people on real records. The placeholders work, say what they are, and are replaced by an UPDATE.
 
 A50 exists because a list meant to catch one thing had filled with five of something else. **The unwatched list is how a real device nobody added gets noticed** — it went four hours unwatched once — and five gate serials sitting on it teach a reader to skip it, and then to skip the sixth line too. The gates now name themselves, the pattern is a row, and the serials it suppresses are **counted on the same report** rather than dropped silently, because a filter nobody can see is a filter nobody can check. The pattern must never be wide enough to swallow a device: the one in service is `PYA8262300072`, and ZKTeco serials carry no hyphen.
 
@@ -621,6 +630,8 @@ So **an outage is not data loss**: the device holds the records and re-pushes th
 |Assuming ZKTeco software can run alongside this|One server setting, and this system holds it|
 |A shared passphrase standing in for accounts on the screens|It is the device's shared password one layer up (§10). Access control is network position until Milestone 5|
 |Serving the device routes and the HR interface on one port|A tunnel to the interface would carry the device routes with it (§14)|
+|A time field on the guard's screen, in its payload, or in the function behind it|A guard who can type a time is a guard who can be asked to type a different one (§3). The server stamps it, and the database refuses a guard row that states one|
+|A way to undo a guard entry|A correction is an act somebody performed. What should replace a wrong one is undecided, and a delete button would settle it by accident (§3, BUILD.md Parked)|
 |A screen that works out a figure of its own|It becomes a second place the answer lives, and the screen and the filed record can then disagree (§7). Screens ask; they do not calculate|
 |A serial pattern wide enough to suppress a real device|The unwatched list is the only thing that notices a device nobody added (§9 A50)|
 
@@ -634,6 +645,7 @@ So **an outage is not data loss**: the device holds the records and re-pushes th
 - **That separation is what makes remote access possible at all.** Tailscale reaches the HR port and only the HR port; the device routes are not there to be reached. A single application on a single port could not honour "tunnel the HR interface, never the device routes" — the tunnel would carry both.
 - **Tailscale is a private network, not a public URL**, which matters because **there is no login on these screens before Milestone 5**. Access control is network position, exactly as it is for the device routes.
 - **The guard does not use the tunnel.** He is on factory Wi-Fi, reaching the server by its LAN address — never mobile data, because §12 keeps the receiver off any public path.
+- **The guard's screen is on the same port and is not part of the HR interface.** Same application, same LAN, different person and different place — it carries none of HR's chrome and reaches none of HR's screens. It shares the port because it shares the network, not because it shares an audience.
 - **The interface asks and draws; it does not calculate.** Every screen is a face on a function the command line already calls, and the HTTP layer holds no query, no date arithmetic and no totals of its own. That is what keeps §7's one render one render.
 - Server-observed times are stored with timezone. Device-reported times are stored as the device sent them, alongside the original string, **never converted on the way in**.
 - **No migrations until real punches arrive** (see BUILD.md). Until then the database is dropped and recreated.

@@ -107,18 +107,26 @@ class CellReader(html.parser.HTMLParser):
         self.grid_scroll: str | None = None
         self.list_headings: list[str] = []
         self._open: tuple[str, dict] | None = None
+        self._depth = 0
         self._text: list[str] = []
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
+        if self._open is not None and tag == self._open[0]:
+            # Depth, not the first closing tag: a marked element with anything
+            # nested inside it would otherwise be captured only as far as the
+            # first `</...>`, and half a sentence usually still passes.
+            self._depth += 1
         if "data-cell" in attributes or "data-note" in attributes:
             self._open = (tag, attributes)
+            self._depth = 0
             self._text = []
         if "data-weekday" in attributes:
             self.weekday_shaded[attributes["data-weekday"]] = (
                 "bg-slate-300" in (attributes.get("class") or ""))
         if "data-provisional-banner" in attributes:
             self._open = (tag, attributes)
+            self._depth = 0
             self._text = []
         if "data-note-unread" in attributes:
             self.note_unread = True
@@ -147,6 +155,9 @@ class CellReader(html.parser.HTMLParser):
 
     def handle_endtag(self, tag):
         if self._open is None or self._open[0] != tag:
+            return
+        if self._depth:
+            self._depth -= 1
             return
         _, attributes = self._open
         text = "".join(self._text)
@@ -491,6 +502,7 @@ def main() -> int:
     # ---- 4. the HTTP layer computes nothing ----------------------------
     print("\n-- the HTTP layer imports service functions and computes nothing")
     import app.hr_app as hr_app_module
+    from app.hr_app import hr_app
 
     tree = module_source(hr_app_module)
     imports = imports_of(tree)
@@ -524,9 +536,17 @@ def main() -> int:
         gate.check(status == 405, f"{method} {path} is refused (405)",
                    f"got {status}")
     source = pathlib.Path(hr_app_module.__file__).read_text()
-    for verb in ("post", "put", "patch", "delete"):
+    for verb in ("put", "patch", "delete"):
         gate.check(f"@app.{verb}(" not in source,
                    f"no @app.{verb} route exists on the interface")
+    # **One route writes, and it is the guard's** (piece 3). The read-only
+    # screens stay read-only, which is what the 405s above are asking.
+    posts = [route.path for route in hr_app.routes
+             if "POST" in (getattr(route, "methods", None) or set())
+             and not route.path.startswith("/iclock")]
+    gate.check(posts == ["/api/guard/entry"],
+               "the only route that writes is the guard's entry",
+               f"these accept POST: {posts}")
 
     # ---- 6. the detail screen is app.detail ----------------------------
     print("\n-- the detail screen is app.detail, and says what leave says")
