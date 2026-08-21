@@ -1,3 +1,15 @@
+# The HR interface is built here and nowhere else: this stage has Node, and
+# the runtime image below does not. Only the compiled files cross over
+# (SPEC §14).
+FROM node:22-alpine AS ui
+
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY ui/ ./
+RUN npm run build
+
+
 FROM python:3.13-slim
 
 COPY --from=ghcr.io/astral-sh/uv:0.12 /uv /uvx /bin/
@@ -12,8 +24,12 @@ COPY app ./app
 COPY tools ./tools
 RUN uv sync --frozen --no-dev
 
+# The built interface. No Node, no sources, no build tools in this image.
+COPY --from=ui /ui/dist /srv/ui
+
 ENV PATH="/srv/.venv/bin:$PATH"
 
-# Plain HTTP. The device cannot do anything else, and this listener never
-# leaves the LAN (SPEC.md §12, §14).
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Two ports from one process: the receiver for the device, the HR interface for
+# people. Plain HTTP — the device cannot do anything else, and neither listener
+# leaves the LAN except the HR one through Tailscale (SPEC §12, §14).
+CMD ["python", "-m", "app.serve"]

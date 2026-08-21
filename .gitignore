@@ -12,3 +12,10 @@ import/*
 # (SPEC §7): the file is an output and is regenerated whenever it is wanted.
 export/*
 !export/.gitkeep
+
+# The interface's dependencies and build output. package.json and
+# package-lock.json are committed — both the project file and the lock file,
+# the same rule uv follows (CLAUDE.md). The Dockerfile's Vite stage installs
+# from the lock and builds; nothing here is kept.
+ui/node_modules/
+ui/dist/

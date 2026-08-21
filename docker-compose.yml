@@ -32,6 +32,13 @@ services:
       # pointed at 8081. 8000 is taken on this host by Production Tracking and
       # 8080 by another project; both stay separate from this system.
       - "${RECEIVER_PORT:-8081}:8000"
+
+      # The HR interface, on its own port and its own ASGI application. This is
+      # the only port Tailscale ever reaches: the device routes are not served
+      # here, so a tunnel to it cannot carry them (SPEC.md §14). The guard uses
+      # this port too, over factory Wi-Fi by the server's LAN address — never
+      # the tunnel and never mobile data.
+      - "${HR_PORT:-8090}:8100"
     volumes:
       # The importer reads spreadsheets from the host. `fixtures` is the
       # committed sample; `import` is where HR's real list goes, and is not

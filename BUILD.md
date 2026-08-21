@@ -42,6 +42,7 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 |**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it — **built; the rows exist and a total is a query away**|
 |**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7) — **built; leave codes wait on step 5**|
 |**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device — **the queue is built and carries REBOOT and CHECK; user push waits on the formats being real**|
+|**10**|**The screen** — the HR interface and the guard's one screen, in seven pieces|Each piece has its own gate; piece 1 is the serving shape|
 |**9**|**Ingestion alert** — warns when punches stop arriving|Silence for N hours raises a warning — **built; contact silence and punch silence are separate, both rows**|
 
 **Then: demo to HR, walking the assumed values line by line while the software is on screen.**
@@ -77,6 +78,14 @@ What it produces across the 54 employees who have a PIN: two punches on most wor
 **Two fixtures, and a rule about PINs.** `fixtures/employees_sample.xlsx` is the shape of HR's list. `fixtures/employees_punch_demo.xlsx` is a demonstration list of 58 employees whose PINs match punches actually in the raw layer — `1` for the real device, `0090`/`0657`/`1627` and `0001`–`0050` for the simulator — so the sheet can be seen with data on it. Four of its employees have no Device ID at all, because an empty row is a real case.
 
 **A device PIN with a leading zero is refused on import** (SPEC §2). The device will not hold one (§10), so a mapping row carrying `0142` looks like a working link and silently is not — the employee's punches go unattributed with nothing on screen saying why. The sample fixture carried exactly that and now carries `142`. `--accept-leading-zero-pins` loads one deliberately, which is what the demonstration list needs, because the simulator sends shapes the hardware cannot. **The import report now names every employee's PIN outcome** — mapped, blank cell, or refused — since a count cannot tell a correctly skipped blank from a rejected value. The import gate proves both directions.
+
+**Step 10, piece 1 is built: the serving shape.** Two ports, one codebase, one container. `python -m app.serve` starts both ASGI applications in one process — the receiver on the container's 8000, published as `RECEIVER_PORT` 8081; the HR interface on 8100, published as `HR_PORT` 8090. The interface is React and Tailwind, built by a Vite stage in the Dockerfile; **the runtime image carries no Node**, only `dist`.
+
+**Why two ports and not one application.** SPEC §14 wants the HR interface reachable through a tunnel and the device routes never. One application on one port cannot do that: whatever the tunnel reaches, it reaches all of. So the device routes are simply **not present** on the HR port — `/iclock/` there is a `404`, not a redirect and not the single-page fallback, because a device reading an HTML page as a protocol answer is what §12 says makes firmware retry forever.
+
+`tools/serving_gate.py` is 31 checks, and it asks both ports the way a device and a browser would. Broken on purpose, two ways: **mounting the receiver into the HR app and removing the refusal** put a live handshake on the tunnel's port — `GET OPTION FROM: GATE` — and six checks failed; **mounting it while leaving the refusal in front of it** answers `404` correctly and is still caught, because the interface must not so much as import the receiver. An app that imports it is one reordering away from serving it.
+
+The seven pieces, in order: **1 serving shape** · 2 read-only screens (employee list, the sheet, per-day detail, the Excel download) · 3 the guard screen · 4 leave entry · 5 gate pass entry · 6 HR corrections · 7 the demo pass.
 
 **Step 5 is built.** `hr leave add` and `hr gatepass add` type what is on the two forms, and nothing else — no approval routed, no entitlement, no balance. The vocabularies are rows: seven ticks on the leave form, nine legend codes, four gate pass categories. **Three of the seven types carry a suggested sheet code and four carry none**, because the legend has no letter for them, and the screen offers nothing rather than the nearest guess (A48).
 
@@ -171,6 +180,10 @@ Run it:
     uv run python tools/attendance_gate.py    # must exit 0
     uv run python tools/sheet_gate.py         # must exit 0
     uv run python tools/alert_gate.py         # must exit 0
+    uv run python tools/serving_gate.py       # must exit 0 — both ports, by asking
+
+    # the interface: http://<server>:8090/   ·  the receiver stays on 8081
+    docker compose up -d --build
 
     hr devices add --serial PYA8262300072 --label "SenseFace 4A, main door"
     hr devices list
@@ -394,6 +407,7 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**Which group runs which shift** (SPEC §9 A31)? The seeded schedules are provisional and marked so in the database|HR|Schedule|
 |**The group codes themselves are invented.** DAY-PROD, NIGHT-PROD and OFFICE came from the sample spreadsheet, not from HR — they are replaced by whatever the real employee list carries, not corrected|HR|Schedule|
 |**How is a mistaken correction undone?** A guard entry made for the wrong employee cannot be edited or deleted, and SPEC §3 does not say what should replace it|HR, then management|Corrections|
+|**What happens when the guard confirms the wrong employee?** The screen shows the name back before he confirms, and the row is still un-removable once made (SPEC §3). It blocks nothing before piece 6, and piece 6 is where it has to be answered|Management, then HR|Step 10, piece 6|
 |**How often does a missed punch actually happen?** It decides whether a signed slip is a formality or whether the real question is enrollment quality|HR|The correction evidence decision|
 |**When is the Excel sheet printed and filed?** Monthly on a period boundary is the assumption. Does not block the build|HR|Nothing structural|
 |**How long may the device be silent before somebody should be told** (SPEC §9 A43)? 15 minutes is the assumption, against a device that polls every 10 seconds|Zi Fong, then HR|Nothing — it is a row|

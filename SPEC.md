@@ -607,13 +607,18 @@ So **an outage is not data loss**: the device holds the records and re-pushes th
 |Designing leave entitlements, the export format, the government-application field set, or reports|Blocked on HR. Stop and say so|
 |Storing passport, IC or medical certificate data|Privacy handling undecided|
 |Assuming ZKTeco software can run alongside this|One server setting, and this system holds it|
+|A shared passphrase standing in for accounts on the screens|It is the device's shared password one layer up (§10). Access control is network position until Milestone 5|
+|Serving the device routes and the HR interface on one port|A tunnel to the interface would carry the device routes with it (§14)|
 
 ---
 
 ## 14. Environment
 
-- Python/FastAPI managed with **uv** · React + Tailwind · PostgreSQL · Docker Compose
+- Python/FastAPI managed with **uv** · React + Tailwind, built by a Vite stage in the Dockerfile so the runtime image carries no Node · PostgreSQL · Docker Compose
 - **On-premises, and this is a requirement rather than a preference** — the device pushes over the LAN and cannot reach a cloud host.
-- Remote access by tunnel, **for the HR interface only**. Never the device routes.
+- **Two ports, one codebase, one container.** The receiver answers the device on its port; the HR interface answers people on another. They are two ASGI applications in one process, sharing a database and nothing else, and **the HR application has no `/iclock/` route** — a request for one is a `404` on that port.
+- **That separation is what makes remote access possible at all.** Tailscale reaches the HR port and only the HR port; the device routes are not there to be reached. A single application on a single port could not honour "tunnel the HR interface, never the device routes" — the tunnel would carry both.
+- **Tailscale is a private network, not a public URL**, which matters because **there is no login on these screens before Milestone 5**. Access control is network position, exactly as it is for the device routes.
+- **The guard does not use the tunnel.** He is on factory Wi-Fi, reaching the server by its LAN address — never mobile data, because §12 keeps the receiver off any public path.
 - Server-observed times are stored with timezone. Device-reported times are stored as the device sent them, alongside the original string, **never converted on the way in**.
 - **No migrations until real punches arrive** (see BUILD.md). Until then the database is dropped and recreated.

@@ -1,0 +1,20 @@
+{
+  "name": "hr-attendance-ui",
+  "private": true,
+  "type": "module",
+  "description": "The HR interface. Built by a Vite stage in the Dockerfile; the runtime image carries no Node.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.12",
+    "@vitejs/plugin-react": "^5.0.0",
+    "tailwindcss": "^4.1.12",
+    "vite": "^7.1.3"
+  }
+}
