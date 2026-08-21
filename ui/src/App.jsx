@@ -1,11 +1,13 @@
-// Step 10, piece 2: the read-only screens.
+// The HR interface's screens, and the guard's.
 //
-// Three screens and a download, all of them faces on functions that already
-// exist. **Nothing here writes.** Entry — the guard, leave, gate passes,
-// corrections — is pieces 3 to 6, and each arrives with the record it writes.
+// Piece 2's three read-only screens and the download, piece 3's guard screen,
+// piece 4's leave entry. Every one of them is a face on a function that
+// already exists. **The read-only screens still write nothing**; entry arrives
+// one screen at a time, each with the record it writes — gate passes and HR
+// corrections are pieces 5 and 6.
 //
-// Routing is done here rather than by a library: three paths do not need a
-// dependency, and the server already falls back to this page for any path that
+// Routing is done here rather than by a library: a handful of paths do not
+// need a dependency, and the server already falls back to this page for any path that
 // is not an API or a device route (SPEC §14).
 import { useEffect, useState } from 'react'
 
@@ -13,6 +15,7 @@ import Employees from './screens/Employees.jsx'
 import Sheet from './screens/Sheet.jsx'
 import Detail from './screens/Detail.jsx'
 import Guard from './screens/Guard.jsx'
+import LeaveEntry from './screens/LeaveEntry.jsx'
 
 function useRoute() {
   const [route, setRoute] = useState(() => window.location.pathname + window.location.search)
@@ -63,7 +66,9 @@ export default function App() {
   }
 
   let screen
-  if (path === '/sheet') {
+  if (path === '/leave') {
+    screen = <LeaveEntry go={go} />
+  } else if (path === '/sheet') {
     screen = <Sheet search={search} go={go} />
   } else if (path.startsWith('/employee/')) {
     screen = <Detail number={decodeURIComponent(path.slice('/employee/'.length))} search={search} go={go} />
@@ -83,9 +88,14 @@ export default function App() {
             <NavLink to="/sheet" current={route} go={go}>
               The sheet
             </NavLink>
+            <NavLink to="/leave" current={route} go={go}>
+              Leave entry
+            </NavLink>
           </nav>
           <span className="ml-auto text-xs text-slate-400">
-            read only — nothing on these screens writes anything
+            {path === '/leave'
+              ? 'leave entry writes what HR types off a signed form'
+              : 'read only — nothing on these screens writes anything'}
           </span>
         </div>
       </header>

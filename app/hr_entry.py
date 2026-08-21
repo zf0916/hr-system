@@ -96,7 +96,15 @@ def record_leave(session, employee: Employee, *, period_from: dt.date,
             "never computed from the range: a half day, and a non-working day "
             "inside a range, both mean the count and the span differ (SPEC §6)"
         )
-    days = Decimal(str(days))
+    try:
+        days = Decimal(str(days).strip())
+    except (ArithmeticError, ValueError):
+        raise ValueError(
+            f"{days!r} is not a number of days. The form states it — 1, 2, or "
+            "0.5 for a half day (SPEC §6)"
+        ) from None
+    if days.is_nan() or days.is_infinite():
+        raise ValueError(f"{days} is not a number of days")
     if days <= 0:
         raise ValueError(f"{days} days is not a number of days")
     if days % Decimal("0.5") != 0:

@@ -322,6 +322,16 @@ SCREEN_USERS = [
      "A51 — placeholder. The guard roster is unread (BUILD.md, Parked)"),
     ("guard-2", "Guard 2", "guard", "on duty at the guard house", 2, True,
      "A51 — placeholder. The guard roster is unread (BUILD.md, Parked)"),
+    # **HR's two, and these are real people**, named by the factory rather than
+    # stood in for. They are not provisional and the screen does not say they
+    # are: a placeholder warning over a real name teaches a reader to ignore the
+    # warning where it is true. The names are as given — no surname and no
+    # title has been read off any roster, and neither is needed to attribute a
+    # form somebody typed.
+    ("hr-aisyah", "Aisyah", "hr", "Human Resource Dept", 1, False,
+     "named by the factory; not a placeholder"),
+    ("hr-aslida", "Aslida", "hr", "Human Resource Dept", 2, False,
+     "named by the factory; not a placeholder"),
 ]
 
 
@@ -400,25 +410,57 @@ def _rows() -> list:
     ]
 
 
-def seed(session, only_empty: bool = False) -> list[str]:
-    """Write the rows. Returns the tables it filled.
+def _key(model, row) -> tuple:
+    """A seeded row's primary key, read off the object rather than assumed."""
+    from sqlalchemy import inspect as sa_inspect
 
-    `only_empty` skips any table that already has a row in it. **It never
-    updates and never deletes**: a row HR has corrected is HR's, and a seed
-    that overwrote it would quietly undo the correction. That is what makes
-    adding a table safe now that the database holds leave records and gate
-    passes typed off paper.
+    return tuple(getattr(row, column.name)
+                 for column in sa_inspect(model).primary_key)
+
+
+def seed(session, only_missing: bool = False) -> tuple[dict, list[str]]:
+    """Write the rows. Returns what it added per table, and what it would not
+    decide about.
+
+    `only_missing` adds the rows the seed has and the database does not, **by
+    primary key**, and leaves everything else alone. It never updates and never
+    deletes: a row HR has corrected is HR's, and a seed that overwrote it would
+    quietly undo the correction. That is what makes adding a table — or a row
+    to a table that already has some — safe now that the database holds leave
+    records, gate passes and guard entries that nothing can rebuild.
+
+    **It compares keys, not contents.** A row whose key is present is skipped
+    however far its columns have drifted from what is written here, because the
+    drift is the correction. And a seeded row somebody deliberately deleted
+    comes back, for the same reason: this cannot tell a deletion from a table
+    that never had it.
+
+    **A table whose seeded rows carry no key of their own is left alone and
+    named.** `device_option` is the one: its key is a serial the database
+    assigns, so every row built here looks new and a second run would insert
+    all ten again. It did, the first time this was tried. Adding a row to such
+    a table is a deliberate INSERT, not a re-seed, and this says so rather than
+    doubling the table quietly.
     """
     from sqlalchemy import func, select
 
-    filled: list[str] = []
+    added: dict[str, list[str]] = {}
+    undecidable: list[str] = []
     for model, build in _rows():
-        if only_empty and session.scalar(
+        rows = build()
+        if only_missing and session.scalar(
                 select(func.count()).select_from(model)):
+            if any(part is None for row in rows for part in _key(model, row)):
+                undecidable.append(model.__tablename__)
+                continue
+            present = {_key(model, row) for row in session.scalars(select(model))}
+            rows = [row for row in rows if _key(model, row) not in present]
+        if not rows:
             continue
-        for row in build():
+        for row in rows:
             session.add(row)
         session.flush()
-        filled.append(model.__tablename__)
+        added[model.__tablename__] = [
+            "|".join(str(part) for part in _key(model, row)) for row in rows]
     session.commit()
-    return filled
+    return added, undecidable

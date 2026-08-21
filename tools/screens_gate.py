@@ -539,13 +539,16 @@ def main() -> int:
     for verb in ("put", "patch", "delete"):
         gate.check(f"@app.{verb}(" not in source,
                    f"no @app.{verb} route exists on the interface")
-    # **One route writes, and it is the guard's** (piece 3). The read-only
-    # screens stay read-only, which is what the 405s above are asking.
-    posts = [route.path for route in hr_app.routes
-             if "POST" in (getattr(route, "methods", None) or set())
-             and not route.path.startswith("/iclock")]
-    gate.check(posts == ["/api/guard/entry"],
-               "the only route that writes is the guard's entry",
+    # **Two routes write, and this names both** (pieces 3 and 4). The list
+    # grows one entry per entry screen and is written out rather than counted,
+    # so a route that starts writing without a piece behind it is a failure
+    # here rather than a number that moved. Piece 2's screens stay read-only,
+    # which is what the 405s above are asking.
+    posts = sorted(route.path for route in hr_app.routes
+                   if "POST" in (getattr(route, "methods", None) or set())
+                   and not route.path.startswith("/iclock"))
+    gate.check(posts == ["/api/guard/entry", "/api/leave/entry"],
+               "the routes that write are the guard's entry and leave entry",
                f"these accept POST: {posts}")
 
     # ---- 6. the detail screen is app.detail ----------------------------

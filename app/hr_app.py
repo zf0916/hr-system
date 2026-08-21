@@ -17,11 +17,12 @@ exactly as it is for the device routes: the LAN for the guard, Tailscale for
 HR. A shared passphrase would be the device's shared password one layer up
 (§10, §13).
 
-**Every route here is one call into `app.screens`.** That module is the only
-part of the application this file imports, and it hands back finished answers —
-so there is nothing on this side of the wall to compute a figure from. A screen
-is a face on a function that already exists; it never becomes a second place
-where the answer is worked out.
+**Every route here is one call into a service module.** `app.screens` for the
+read-only screens, `app.guard` for the guard's, `app.leave_entry` for leave —
+and nothing else of the application is imported. They hand back finished
+answers, so there is nothing on this side of the wall to compute a figure from.
+A screen is a face on a function that already exists; it never becomes a second
+place where the answer is worked out.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from pydantic import BaseModel, ConfigDict
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import guard, screens
+from app import guard, leave_entry, screens
 from app.db import Session, database_state
 
 # Where the Dockerfile's build stage leaves the compiled interface. On a
@@ -72,6 +73,33 @@ class GuardEntry(BaseModel):
     guard_code: str
     employee_number: str
     reason_code: str
+
+
+class LeaveEntry(BaseModel):
+    """What the leave entry screen may send, exhaustively.
+
+    `extra="forbid"` again, and here it carries more weight than it does for a
+    guard entry. **There is no `sql_account_code` field**, so a payload naming
+    one is a `422` rather than a value written into a column §8 says stays
+    empty; and there is no field for a signature, an entitlement, a balance or
+    a day count worked out from the range. A payload that quietly dropped one
+    of those would look exactly like a payload that honoured it.
+
+    `days` is a string on purpose. It becomes a `Decimal` in the service layer,
+    so a half day is `0.5` and never a float that is nearly 0.5 (SPEC §9 A15).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    entered_by: str
+    employee_number: str
+    period_from: str
+    period_to: str
+    days: str
+    date_of_application: str | None = None
+    leave_type_code: str | None = None
+    sheet_code: str | None = None
+    reason: str | None = None
 
 
 def _write(function, session, **arguments):
@@ -190,6 +218,56 @@ def create_hr_app() -> FastAPI:
                 guard.record, session, guard_code=entry.guard_code,
                 employee_number=entry.employee_number,
                 reason_code=entry.reason_code))
+
+    # ---- leave entry (piece 4) -------------------------------------------
+
+    @app.get("/api/leave/screen")
+    def leave_screen():
+        """The form's field order, who may type it, the seven ticks and the
+        nine legend codes. Everything but the order is a row."""
+        with Session() as session:
+            return JSONResponse(_read(leave_entry.screen, session))
+
+    @app.get("/api/leave/employee/{employee_number}")
+    def leave_look_up(employee_number: str, on: str | None = None):
+        """Name, staff number and department, to read against the paper."""
+        with Session() as session:
+            return JSONResponse(_read(leave_entry.look_up, session,
+                                      employee_number=employee_number, on=on))
+
+    @app.get("/api/leave/range-check")
+    def leave_range_check(days: str,
+                          period_from: str = Query(..., alias="from"),
+                          period_to: str = Query(..., alias="to")):
+        """The typed count beside the range it covers.
+
+        **This never becomes the count.** It exists so the screen can show both
+        numbers and say which one is the form's, which is what §6 asks of any
+        screen showing a leave record. The answer is a sentence and two
+        figures; the browser is given it finished and works nothing out.
+        """
+        with Session() as session:
+            return JSONResponse(_read(
+                leave_entry.range_check, session, period_from=period_from,
+                period_to=period_to, days=days))
+
+    @app.post("/api/leave/entry")
+    def leave_record(entry: LeaveEntry):
+        """One line of leave, through the same function `hr leave add` calls.
+
+        **The day count is handed on as it arrived.** Nothing on this side of
+        the wall subtracts the two dates, and `leave_entry.record` has no path
+        to the one function that does (SPEC §6).
+        """
+        with Session() as session:
+            return JSONResponse(_write(
+                leave_entry.record, session, entered_by=entry.entered_by,
+                employee_number=entry.employee_number,
+                period_from=entry.period_from, period_to=entry.period_to,
+                days=entry.days,
+                date_of_application=entry.date_of_application,
+                leave_type_code=entry.leave_type_code,
+                sheet_code=entry.sheet_code, reason=entry.reason))
 
     @app.api_route(
         "/iclock/{rest:path}",

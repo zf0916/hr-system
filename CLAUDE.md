@@ -24,7 +24,7 @@ Python/FastAPI managed with **uv** · React + Tailwind · PostgreSQL · Docker C
 
 **Real device capture now exists in the raw layer and cannot be recreated. Never drop that table** — schema changes are still free, but `raw_request` is preserved across them by dump, recreate, restore, replay, the procedure BUILD.md records. That is not a migration and does not become one.
 
-**Nor is capture the only thing that cannot be recreated any more.** `leave_record`, `gate_pass` and `manual_punch` are what people typed and did; nothing rebuilds them. **Adding a table is therefore `hr seed --add-missing`**, which creates what the model has and the database does not and seeds only empty tables — it never drops, updates or deletes. Dropping and recreating is only for a database that holds none of those.
+**Nor is capture the only thing that cannot be recreated any more.** `leave_record`, `gate_pass` and `manual_punch` are what people typed and did; nothing rebuilds them. **Adding a table or a seeded row is therefore `hr seed --add-missing`**, which creates what the model has and the database does not and adds the seeded rows it does not have, by primary key — it never drops, updates or deletes, and it names every row it adds. A table whose seeded rows carry no key of their own is left alone and named, because a missing one cannot be told from a present one. Dropping and recreating is only for a database that holds none of those.
 
 ## Rules
 

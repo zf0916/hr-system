@@ -235,6 +235,18 @@ class Browser:
         self.go(url)
         return self.evaluate_raw(expression)
 
+    def screenshot(self, path) -> None:
+        """The page as it now stands, written to a file.
+
+        Taken after whatever has been clicked, which is the point: a shot of a
+        freshly loaded page shows the page nobody has used.
+        """
+        import pathlib as _pathlib
+
+        result = self.command("Page.captureScreenshot",
+                              {"format": "png", "captureBeyondViewport": True})
+        _pathlib.Path(path).write_bytes(base64.b64decode(result["data"]))
+
     def stop(self) -> None:
         if self.socket:
             self.socket.close()

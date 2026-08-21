@@ -42,7 +42,7 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 |**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it — **built; the rows exist and a total is a query away**|
 |**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7) — **built; leave codes appear, and the browser draws the same render**|
 |**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device — **the queue is built and carries REBOOT and CHECK; user push waits on the formats being real**|
-|**10**|**The screen** — the HR interface and the guard's one screen, in seven pieces|Each piece has its own gate; **pieces 1 and 2 are built** — the serving shape, then the read-only screens|
+|**10**|**The screen** — the HR interface and the guard's one screen, in seven pieces|Each piece has its own gate; **pieces 1 to 4 are built** — the serving shape, the read-only screens, the guard screen, leave entry|
 |**9**|**Ingestion alert** — warns when punches stop arriving|Silence for N hours raises a warning — **built; contact silence and punch silence are separate, both rows**|
 
 **Then: demo to HR, walking the assumed values line by line while the software is on screen.**
@@ -85,7 +85,25 @@ What it produces across the 54 employees who have a PIN: two punches on most wor
 
 `tools/serving_gate.py` is 31 checks, and it asks both ports the way a device and a browser would. Broken on purpose, two ways: **mounting the receiver into the HR app and removing the refusal** put a live handshake on the tunnel's port — `GET OPTION FROM: GATE` — and six checks failed; **mounting it while leaving the refusal in front of it** answers `404` correctly and is still caught, because the interface must not so much as import the receiver. An app that imports it is one reordering away from serving it.
 
-The seven pieces, in order: **1 serving shape** · **2 read-only screens** · **3 the guard screen** · 4 leave entry · 5 gate pass entry · 6 HR corrections · 7 the demo pass.
+The seven pieces, in order: **1 serving shape** · **2 read-only screens** · **3 the guard screen** · **4 leave entry** · 5 gate pass entry · 6 HR corrections · 7 the demo pass.
+
+**Step 10, piece 4 is built: leave entry.** One page at `/leave`, on the HR interface's own chrome. **HR types a form that has already been signed on paper** (SPEC §6) and the screen computes nothing that ends up on the row: it writes through `hr_entry.record_leave`, the same function `hr leave add` calls.
+
+**The fields are in the paper's order** — name, staff no., department, date of application, nature of leave, period from, to, no. of days — so a person reads down the screen and down the form together. The order is a list in `app/leave_entry.py` and the page is checked against what the server states, not against its own source. The sheet legend's code is not among them and is asked for after them, under a heading saying it is not on the form.
+
+**The day count is typed and nothing derives it.** `leave_entry.record` cannot reach `range_check`, which is the only function in the entry path that counts a range, and the gate reads that out of the call graph rather than out of the prose. What `range_check` produces goes to the screen and stops there: beside the box, while the number is being typed, **1.5 days, as the form states — over a 2-day range. The form's number is the one that counts** — the wording piece 2 settled on the day detail screen. **The browser does not count the range either**; it asks, so a date parsed one day out cannot invent a disagreement.
+
+**The tick and the code stay two fields.** Pressing *Annual* puts `AL` in the code box and says it is a suggestion (A48); pressing *Maternity* puts nothing there and says the legend has no letter for it. The suggestion fills an untouched box and never overwrites a choice — overwriting one would be the screen filling one field in from the other, which §6 forbids. **A type with no code and a code with no type both save.**
+
+**The SQL Account code is on the screen only as a blank that is named.** There is no field for it, the payload model has none, and the recorded line prints *SQL Account code empty (SPEC §8)* rather than leaving a reader to notice an absence. Approval, entitlement and balance are listed under *Not on this screen*, with the five signature boxes, because §6 keeps all of them for Milestone 5.
+
+**Who is typing is a row, and HR's two are real people.** `screen_user` gained `hr-aisyah` and `hr-aslida` — Aisyah and Aslida, **not provisional and not warned about**, unlike the guard placeholders A51 stands over. A placeholder notice printed over a real name teaches a reader to skip the notice where it is true.
+
+**Adding those two rows needed `hr seed --add-missing` to grow.** It seeded only *empty tables*, and `screen_user` already held the two guards, so a new row in an existing seeded table had nowhere to come from but hand-written SQL. It now adds the seeded rows the database does not have, **by primary key**, and names every one it adds. **The first version of that doubled `device_option`** — its key is a serial the database assigns, so all ten rows looked new on every run, and a second run inserted them again. A table whose seeded rows carry no key of their own is now left alone and named. It was caught on a throwaway database, before the working one was touched.
+
+**`tools/leave_entry_gate.py` is 105 checks**, and it presses the page rather than reading it: choose the typist, type the number, press *Annual*, press *Maternity*, override the code, fill the dates, type 1.5, press *Save* — then open the August sheet and find `EL` in the two cells, with nothing else run. Broken on purpose, five ways: **the service function deriving the count from the range** failed ten checks, including the stored number and every refusal that stopped refusing; **the screen quietly correcting 1.5 to 2** failed six, and the recorded line said 2 days; **offering the nearest letter for an uncoded type** put `AL` on Maternity and failed by name; **the payload sending the suggestion instead of the override** stored `AL` and put `AL` in the sheet cells; **requiring both vocabularies** refused Maternity-with-no-code and `EL`-with-no-tick.
+
+**Two of the deliberate breaks wrote real leave records, and that is the lesson repeating.** The gate's refusal checks posted to the working interface, and a break that turns a refusal into an acceptance turns those posts into writes: **`leave_record` 157, 158 and 159 — employee `0090`, ANNUAL, 2026-08-07 to 2026-08-08, 2.00 days each, attributed to Aisyah, timestamped 14:16 on 2026-08-21.** They are inventions and they are **not deleted**: nothing in a working session deletes from `leave_record`, including tidying up after a deliberate mistake, and the August sheet reads correctly only if this note is read with it. The gate was then rebuilt so that **every `POST` it makes goes to a throwaway database** — `tools/throwaway.py` creates one beside the working one, runs the same image against it on the compose network, and drops it at the end. Reads still go to the interface that is actually serving. The three rows are the price of finding that out, and re-running that break afterwards cost nothing.
 
 **Step 10, piece 3 is built: the guard screen.** One page at `/guard`, on a phone, on the factory Wi-Fi by LAN address. It carries none of the HR interface's chrome and reaches none of its screens. Four steps: who is on duty, which employee, why, confirm — then the server stamps the time.
 
@@ -121,7 +139,7 @@ The confirm step lives at `/guard?employee=0090`, which means the phone's Back b
 
 **The grid freezes its edges the way the file does.** The three identifying columns stay put while the days scroll, the day-number and weekday rows stay put while the employees scroll, and the grid scrolls inside a bounded box so the horizontal scrollbar is reachable without passing 58 rows first — the screen's answer to the file's freeze panes and repeating print titles. Each day column is as wide as the widest thing in it, which is the rule `to_text` already followed. **Shading was a header-only stripe and is now the whole column**, cells included, as `to_excel` fills it.
 
-**`tools/screens_gate.py` is 99 checks**, and it reads the page out of a real browser — Chromium's own `--dump-dom` inside the Playwright image, no driver package and nothing installed at run time. Broken on purpose, four ways: **the browser truncating a two-time cell** to its first half changed ten cells and was caught only by the DOM check, which is the whole reason that check exists; **dropping the deterministic write** made two exports differ and the download stop matching; **a loop and an import added to a route handler** failed the import check and the AST check together; **widening the fixture-serial pattern** to `^(GATE|TEST|CHECK|NOT|PYA)` made the real device look like a fixture and failed on its serial by name.
+**`tools/screens_gate.py` is 106 checks**, and it reads the page out of a real browser — Chromium's own `--dump-dom` inside the Playwright image, no driver package and nothing installed at run time. Broken on purpose, four ways: **the browser truncating a two-time cell** to its first half changed ten cells and was caught only by the DOM check, which is the whole reason that check exists; **dropping the deterministic write** made two exports differ and the download stop matching; **a loop and an import added to a route handler** failed the import check and the AST check together; **widening the fixture-serial pattern** to `^(GATE|TEST|CHECK|NOT|PYA)` made the real device look like a fixture and failed on its serial by name.
 
 **One of those breaks passed the first time and should not have.** The rebuilt image had not reached the container, so the gate read the old page and agreed with it. The bundle is now checked for the change before the failure is believed — a gate proven against a stale artefact proves nothing.
 
@@ -259,8 +277,15 @@ Run it:
     http://<server>:8090/            # employees, on a date
     http://<server>:8090/sheet?month=2026-08
     http://<server>:8090/employee/0090?month=2026-08
-    uv run python tools/screens_gate.py        # 99 checks; reads the real DOM
+    uv run python tools/screens_gate.py        # 106 checks; reads the real DOM
     uv run python tools/screens_gate.py --no-dom   # without Docker
+
+    http://<server>:8090/leave              # leave entry, off the paper form
+    uv run python tools/leave_entry_gate.py    # 105 checks; presses the page,
+                                               #   and saves on a throwaway
+    uv run python tools/leave_entry_gate.py --no-dom   # without the browser
+    uv run python tools/throwaway.py        # the same interface, on a database
+                                            #   that is dropped when it exits
 
     hr alert fixtures                          # what the unwatched list omits
 
@@ -284,7 +309,8 @@ Run it:
     uv run python tools/guard_gate.py       # 80 checks; drives the page at phone width
     uv run python tools/browser.py <url> <js>   # measure or press anything, by hand
 
-    hr seed --add-missing                   # a new table, without dropping anything
+    hr seed --add-missing                   # a new table or seeded row, without
+                                            #   dropping anything. Names what it adds
 
     hr corrections guard --employee 0090 --reason biometric_failed --by "Guard: ..."
     hr corrections retroactive --employee 0090 --at "2026-08-17 08:05:00" \
@@ -461,7 +487,7 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |Are numbers reused after someone leaves?|HR|Employees|
 |What employee groups exist, and does the group decide shift and break?|HR|Schedule|
 |Half-day marks — which leave types can be half days?|HR|Leave|
-|**Is `AL` for Annual, `MC` for Sick and `UL` for Unpaid what HR actually writes on the sheet** (SPEC §9 A48)? Leave entry suggests those three and offers nothing for the other four form types, because the legend has no code for them. It is a convenience on the screen, not a mapping — HR corrects it when they see it|HR|Nothing — the row records what HR typed|
+|**Is `AL` for Annual, `MC` for Sick and `UL` for Unpaid what HR actually writes on the sheet** (SPEC §9 A48)? **The leave entry screen shows it happening**: pressing *Annual* puts `AL` in the code box and says it is a suggestion, pressing *Maternity* puts nothing there and says the legend has no letter for it. A convenience on the screen, not a mapping — HR overrides it in front of us and the row records what they typed|HR|Nothing — the row records what HR typed|
 |Is there one leave card per leave type per employee, or one card covering all types? The card has no type column|HR|Nothing structural|
 |**What is the note in the top-left of the attendance sheet** (SPEC §9 A41)? A close-up photo may answer the schedule question. The sheet renders the cell empty and marked unread until it is read|HR|The sheet's top-left cell only|
 |**How many pages is the sheet, and what is headcount** (SPEC §9 A39)? 30 rows to a page is the assumption the renderer uses|HR|Page breaks on the printed sheet|

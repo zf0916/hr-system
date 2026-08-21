@@ -57,17 +57,27 @@ from app.seed import seed as seed_rows
 def cmd_seed(args) -> int:
     # **Adding a table is not dropping the database.** There are still no
     # migrations, and the model is still the only source — but the database now
-    # holds leave records and gate passes typed off paper, and nothing can
-    # rebuild those. `--add-missing` creates the tables the model has and the
-    # database does not, and seeds only tables that are empty. It never drops,
-    # never updates and never deletes (CLAUDE.md).
+    # holds leave records, gate passes and guard entries typed off paper, and
+    # nothing can rebuild those. `--add-missing` creates the tables the model
+    # has and the database does not, and adds the seeded rows it does not have,
+    # by primary key. It never drops, never updates and never deletes
+    # (CLAUDE.md).
+    #
+    # **It names every row it adds**, because a count cannot tell a table that
+    # gained the row somebody expected from one that gained six nobody did.
     if args.add_missing:
         Base.metadata.create_all(engine)
         with Session() as session:
-            filled = seed_rows(session, only_empty=True)
+            added, undecidable = seed_rows(session, only_missing=True)
         print(f"schema brought up to the model at {_dsn()}")
-        print("filled: " + (", ".join(filled) if filled else "nothing — every "
-                            "seeded table already had rows"))
+        if not added:
+            print("added: nothing — every seeded row was already there")
+        for table, keys in added.items():
+            print(f"added: {table}  {', '.join(keys)}")
+        for table in undecidable:
+            print(f"left alone: {table} — its seeded rows carry no key of "
+                  "their own, so a missing one cannot be told from a present "
+                  "one. Add to it with a deliberate INSERT")
         return 0
 
     with Session() as session:
@@ -424,8 +434,9 @@ def main() -> int:
     p_seed.add_argument(
         "--add-missing",
         action="store_true",
-        help="create tables the model has and the database does not, and seed "
-             "only the empty ones. Drops nothing",
+        help="create tables the model has and the database does not, and add "
+             "the seeded rows it does not have. Drops, updates and deletes "
+             "nothing",
     )
     p_seed.add_argument(
         "--force",
