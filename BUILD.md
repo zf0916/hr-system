@@ -66,6 +66,10 @@ Deliberately not in step 2: no employee screen, no push to the device, no leave,
 
 Deliberately not in step 3: no late minutes, no daily attendance, no sheet.
 
+**A month of punches, so the sheet can be read.** `tools/make_month_fixture.py` posts a plausible August at the receiver — **the same `/iclock/cdata` route, the same ten-field ATTLOG line, chunked 20 to a push as A34 reads the device's own limit.** Nothing about it is a second code path: the raw layer stores it, the parser reads it, `hr attendance build` derives the rows, and the sheet renders them. It is deterministic on its seed, it adds to whatever is already captured, and **it writes no leave** — step 5 does not exist and no cell can hold a code.
+
+What it produces across the 54 employees who have a PIN: two punches on most working days, late arrivals scattered with a few people crossing the 30-minute accumulated threshold, a handful of early departures, night-shift employees punching out after midnight, some days with one punch, some with none, and **nothing on a Sunday**.
+
 **Two fixtures, and a rule about PINs.** `fixtures/employees_sample.xlsx` is the shape of HR's list. `fixtures/employees_punch_demo.xlsx` is a demonstration list of 58 employees whose PINs match punches actually in the raw layer — `1` for the real device, `0090`/`0657`/`1627` and `0001`–`0050` for the simulator — so the sheet can be seen with data on it. Four of its employees have no Device ID at all, because an empty row is a real case.
 
 **A device PIN with a leading zero is refused on import** (SPEC §2). The device will not hold one (§10), so a mapping row carrying `0142` looks like a working link and silently is not — the employee's punches go unattributed with nothing on screen saying why. The sample fixture carried exactly that and now carries `142`. `--accept-leading-zero-pins` loads one deliberately, which is what the demonstration list needs, because the simulator sends shapes the hardware cannot. **The import report now names every employee's PIN outcome** — mapped, blank cell, or refused — since a count cannot tell a correctly skipped blank from a rejected value. The import gate proves both directions.
@@ -127,6 +131,10 @@ Run it:
 
     docker compose exec api hr employees import /srv/fixtures/employees_sample.xlsx \
         --mapping /srv/fixtures/employees_sample.mapping.toml --allow-new group
+
+    # a plausible August, pushed at the receiver the way the device would
+    uv run python tools/make_month_fixture.py --port 8081 --dry-run
+    uv run python tools/make_month_fixture.py --port 8081
 
     # the list whose PINs match the captured punches, so the sheet has data on it
     docker compose exec api hr employees import /srv/fixtures/employees_punch_demo.xlsx \
