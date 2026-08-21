@@ -17,9 +17,11 @@ exactly as it is for the device routes: the LAN for the guard, Tailscale for
 HR. A shared passphrase would be the device's shared password one layer up
 (§10, §13).
 
-Piece 1 serves the built page and a health answer. Every screen after it is a
-face on a function that already exists — nothing here computes a figure or
-writes a row that a CLI command cannot.
+**Every route here is one call into `app.screens`.** That module is the only
+part of the application this file imports, and it hands back finished answers —
+so there is nothing on this side of the wall to compute a figure from. A screen
+is a face on a function that already exists; it never becomes a second place
+where the answer is worked out.
 """
 
 from __future__ import annotations
@@ -27,13 +29,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
 
-from app.config import DATABASE_URL
-from app.db import engine
+from app import screens
+from app.db import Session, database_state
 
 # Where the Dockerfile's build stage leaves the compiled interface. On a
 # developer's machine `npm run dev` serves it instead and proxies /api here.
@@ -43,13 +44,16 @@ UI_DIST = Path(os.environ.get("UI_DIST", "/srv/ui"))
 DEVICE_PREFIX = "/iclock"
 
 
-def database_state() -> str:
+def _read(function, session, **arguments):
+    """Call one screen function and turn its refusal into a 400.
+
+    A refusal is a sentence a person can read — "give a month as YYYY-MM" —
+    and it is written where the rule lives, not here.
+    """
     try:
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
-        return f"reachable at {DATABASE_URL.rsplit('@', 1)[-1]}"
-    except Exception as exc:  # the page says so rather than failing to load
-        return f"unreachable: {exc.__class__.__name__}"
+        return function(session, **arguments)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def create_hr_app() -> FastAPI:
@@ -70,6 +74,59 @@ def create_hr_app() -> FastAPI:
             ),
             "database": database_state(),
         })
+
+    # ---- the read-only screens (piece 2) --------------------------------
+    #
+    # **Each of these is one call into `app.screens` and nothing else.** No
+    # loop over cells, no date arithmetic, no formatting, no totals. That is
+    # what holds up §7's claim that the screen and the Excel file cannot
+    # disagree: this layer is never given the ingredients to compute a second
+    # answer, only the answer.
+
+    @app.get("/api/employees")
+    def employees(on: str | None = None, section: str | None = None):
+        with Session() as session:
+            return JSONResponse(_read(
+                screens.roster, session, on_date=on, section=section))
+
+    @app.get("/api/sheet")
+    def sheet(month: str | None = None,
+              start: str | None = Query(None, alias="from"),
+              end: str | None = Query(None, alias="to"),
+              section: str | None = None):
+        with Session() as session:
+            return JSONResponse(_read(
+                screens.sheet_screen, session, month=month, start=start,
+                end=end, section=section))
+
+    @app.get("/api/sheet.xlsx")
+    def sheet_download(month: str | None = None,
+                       start: str | None = Query(None, alias="from"),
+                       end: str | None = Query(None, alias="to"),
+                       section: str | None = None):
+        """The Excel file, exactly as `hr sheet export` writes it.
+
+        The bytes are not made here and are not touched on the way out.
+        """
+        with Session() as session:
+            name, body = _read(screens.sheet_file, session, month=month,
+                               start=start, end=end, section=section)
+        return Response(
+            content=body,
+            media_type=("application/vnd.openxmlformats-officedocument"
+                        ".spreadsheetml.sheet"),
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        )
+
+    @app.get("/api/employees/{employee_number}/detail")
+    def employee_detail(employee_number: str, month: str | None = None,
+                        start: str | None = Query(None, alias="from"),
+                        end: str | None = Query(None, alias="to"),
+                        punches: bool = True):
+        with Session() as session:
+            return JSONResponse(_read(
+                screens.day_detail, session, employee_number=employee_number,
+                month=month, start=start, end=end, with_punches=punches))
 
     @app.api_route(
         "/iclock/{rest:path}",

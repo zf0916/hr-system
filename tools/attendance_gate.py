@@ -151,9 +151,9 @@ def punch(session, pin: str, at: dt.datetime) -> None:
     body = ("\t".join(fields) + "\t\r\n").encode()
     raw = RawRequest(
         method="POST", path="/iclock/cdata",
-        query_string="SN=GATE&table=ATTLOG&Stamp=9999",
+        query_string="SN=GATE-ATTENDANCE&table=ATTLOG&Stamp=9999",
         headers=[["content-type", "text/plain"]], content_type="text/plain",
-        body=body, body_bytes=len(body), serial_number="GATE",
+        body=body, body_bytes=len(body), serial_number="GATE-ATTENDANCE",
         table_param="ATTLOG", stamp_param="9999", response_body="OK: 1")
     session.add(raw)
     session.flush()

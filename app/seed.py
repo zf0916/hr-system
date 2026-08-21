@@ -7,6 +7,7 @@ protocol being unverified is survivable.
 
 import datetime as dt
 
+from app.alert import FIXTURE_SERIAL_PATTERN
 from app.models import (
     AlertSetting,
     AttendanceStatus,
@@ -211,6 +212,11 @@ SHEET_SETTINGS = [
 # about. All rows: the right numbers are guesses until the factory has run on
 # them, and a wrong one is an UPDATE.
 ALERT_SETTINGS = [
+    ("alert.fixture_serial_pattern", FIXTURE_SERIAL_PATTERN,
+     "A50 — which serials the gates and fixtures invent. They are kept off the "
+     "unwatched list, which exists to catch one real device nobody is "
+     "watching; five fixture names on it teach a reader to skip it. Counted "
+     "rather than dropped: `hr alert fixtures`"),
     ("alert.contact_silence_minutes", "15",
      "A43 — the device polls every 10 seconds (the Delay option row), so 15 "
      "minutes is about 90 missed polls. Contact silence means the device is "

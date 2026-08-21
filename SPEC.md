@@ -285,6 +285,7 @@ Either field on a leave record can therefore be empty: a form type with no code,
 - A leave record carries its SQL Account code from the start, left empty until the mapping is answered.
 - **The date of application is recorded, separately from the leave dates.** Both the leave card and the application form carry it: when leave was asked for and when it was taken are different facts, and the paper keeps both.
 - **The number of days is recorded as given, not computed from the range.** The card states it per line and the form has a field for it. A half day, and a non-working day inside a range, both mean the count and the span are not the same number — deriving one from the other would overwrite what HR wrote.
+- **A screen showing a leave record says the count is the form's, and where it differs from the range, shows both numbers.** Not a discrepancy to reconcile: 1½ days over a two-day range is a half day, and a reader who sees only one of the two numbers will eventually correct the "wrong" one. Saying which number came from paper is what stops that.
 - **Entitlement rules and balances are not designed, and neither is the approval workflow.** The chain is known (above); nothing routes it yet. Milestone 1 is entry only: employee, applied-for type, sheet code, date or range, number of days, date of application. The leave card's balance, entitlement, comments and remarks are marked for office use and stay out with them.
 
 **A leave record holds:** employee, applied-for type, sheet code, period from and to, the number of days as the form states it, the date of application, a reason where the form asks for one, the SQL Account code left empty, and who typed it. **It holds no balance, no entitlement and no signature** — the paper was signed before it reached HR, and recording who signed is Milestone 5.
@@ -306,6 +307,12 @@ The Daily Workers Attendance sheet, in HR's existing layout.
 - **A screen, which is the system.** Regenerated on demand, always current with the stored data.
 - **An Excel file in HR's existing layout, which is the record.** That is the artefact that gets filed.
 
+**One render stands behind both, and behind the terminal too.** The sheet is built once and every output draws that same object; a cell's text, whether it is a tick, a time or a code, whether a person entered it, and whether its column shades are all decided in that one place. **An output chooses fonts, colours and widths and nothing else.** The screen and the filed file therefore cannot come to differ about what a day says — not because they are kept in step, but because there is nothing to keep in step.
+
+**The screen carries everything the file carries except how it prints.** Page breaks, the repeating header, landscape, fit-to-width and the legend's own page are facts about paper; the screen scrolls instead. Every mark a reader interprets — cells, shading, the manual asterisk, the legend, the notes — is on both.
+
+**The same period always exports to the same bytes.** Nothing in the file varies with the moment it was made: the document's own timestamps describe the period it covers rather than the export. A filed record that differs from a fresh render only in the clock cannot be compared with anything, and comparing it is how anybody checks that a filed sheet still matches what the system holds.
+
 **The file is printed, so it carries a page setup, not just cells.** Landscape, fit to one page wide, and **the employee header and the day-number row repeat on every page** — a page of ticks with no day numbers above them cannot be read at all. A page break every `rows_per_page` rows (§9 A39, a row), and the legend and notes start their own page at the end rather than sitting under whichever employees happen to be above them. **A file whose pagination does not match that row is a defect in the record even when every cell in it is right.**
 
 **This is what makes "never annotated by hand" enforceable rather than a preference.** A filed record somebody writes on is precisely the thing this system replaces: the writing is invisible to everything downstream, and the sheet cannot be regenerated without losing it. Because the screen is always regenerable and the file is only ever printed from it, a correction has one place to go — a row — and the filed copy is reprinted rather than amended.
@@ -320,7 +327,7 @@ The Daily Workers Attendance sheet, in HR's existing layout.
 - Rest days and public holidays shade as whole columns.
 - Manual punches are marked.
 
-**Per-day punch detail is available for any employee and day. This is what replaces reading the punch card, and it is Accounts who needs it most.** One employee, one period, every day of it, in one view: punch times, leave codes, and manual punches marked. **Accounts prioritises the card over the attendance sheet today** (§1), because the card is the primary record and shows the detail; this view is what that preference transfers to.
+**Per-day punch detail is available for any employee and day. This is what replaces reading the punch card, and it is Accounts who needs it most.** One employee, one period, every day of it, in one view: punch times, leave codes, and manual punches marked. **Re-pushed copies of a punch are counted and stated rather than listed one by one** — a day that arrived two hundred times would otherwise bury the month around it — and the full list stays available on demand. **Accounts prioritises the card over the attendance sheet today** (§1), because the card is the primary record and shows the detail; this view is what that preference transfers to.
 
 ---
 
@@ -374,10 +381,13 @@ Built on, demonstrated, and corrected from what HR says when they see it working
 |A47|**The device reports the result as `ID={id}&Return={code}&CMD={command}`**, with `Return=0` meaning success, posted to `/iclock/devicecmd`. Same document, same lack of evidence|
 |A48|**Leave entry offers a sheet code beside the applied-for type** — Annual Leave `AL`, Sick Leave `MC`, Unpaid Leave `UL` — as a convenience on the screen. The other four form types are offered no code, because the legend has none|
 |A49|**A day with leave shows its sheet code in the cell.** Where the record has no code, the cell shows what the punches say instead of a letter, and the day's fraction is not shown on the sheet at all|
+|A50|**A serial beginning `GATE-` was invented by a gate or a fixture, not by a device.** Four bare names — `GATE`, `TEST`, `CHECK`, `NOTALLOWLISTED9` — are older than that convention and are permanent in the append-only raw layer, so the row names them too|
 
 **Assumptions about presentation and rules are free to make. Assumptions about identity and schema are not.** A19 is isolated in the device-user mapping, so a wrong PIN format is corrected by remapping rows.
 
 **A21 — "the device pushes the PIN with leading zeros intact" — is answered and gone.** The question never arises: the device refuses to accept a leading zero in a user ID at all (§10). The mapping absorbed it with no code change, which is what §13's rule against resolving a PIN at capture was for.
+
+A50 exists because a list meant to catch one thing had filled with five of something else. **The unwatched list is how a real device nobody added gets noticed** — it went four hours unwatched once — and five gate serials sitting on it teach a reader to skip it, and then to skip the sixth line too. The gates now name themselves, the pattern is a row, and the serials it suppresses are **counted on the same report** rather than dropped silently, because a filter nobody can see is a filter nobody can check. The pattern must never be wide enough to swallow a device: the one in service is `PYA8262300072`, and ZKTeco serials carry no hyphen.
 
 A49 is what a reader sees when leave and punches land on the same day. **A coded leave day is a leave cell**: nobody writes a punch time under an `AL`. **An uncoded leave day falls through to the punches**, because four form types have no letter and blanking the cell would hide a punch that really happened — the leave is still on the record and still in the per-day detail, and §6 forbids borrowing a letter from the type applied for. **The fraction is not on the sheet**: a half day shows its code like a full one, and what HR writes for a half day worked is not known.
 
@@ -609,6 +619,8 @@ So **an outage is not data loss**: the device holds the records and re-pushes th
 |Assuming ZKTeco software can run alongside this|One server setting, and this system holds it|
 |A shared passphrase standing in for accounts on the screens|It is the device's shared password one layer up (§10). Access control is network position until Milestone 5|
 |Serving the device routes and the HR interface on one port|A tunnel to the interface would carry the device routes with it (§14)|
+|A screen that works out a figure of its own|It becomes a second place the answer lives, and the screen and the filed record can then disagree (§7). Screens ask; they do not calculate|
+|A serial pattern wide enough to suppress a real device|The unwatched list is the only thing that notices a device nobody added (§9 A50)|
 
 ---
 
@@ -620,5 +632,6 @@ So **an outage is not data loss**: the device holds the records and re-pushes th
 - **That separation is what makes remote access possible at all.** Tailscale reaches the HR port and only the HR port; the device routes are not there to be reached. A single application on a single port could not honour "tunnel the HR interface, never the device routes" — the tunnel would carry both.
 - **Tailscale is a private network, not a public URL**, which matters because **there is no login on these screens before Milestone 5**. Access control is network position, exactly as it is for the device routes.
 - **The guard does not use the tunnel.** He is on factory Wi-Fi, reaching the server by its LAN address — never mobile data, because §12 keeps the receiver off any public path.
+- **The interface asks and draws; it does not calculate.** Every screen is a face on a function the command line already calls, and the HTTP layer holds no query, no date arithmetic and no totals of its own. That is what keeps §7's one render one render.
 - Server-observed times are stored with timezone. Device-reported times are stored as the device sent them, alongside the original string, **never converted on the way in**.
 - **No migrations until real punches arrive** (see BUILD.md). Until then the database is dropped and recreated.

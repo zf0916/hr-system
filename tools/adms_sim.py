@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlencode
 
 SN = "SIM0000000001"
-UNKNOWN_SN = "NOTALLOWLISTED9"
+UNKNOWN_SN = "GATE-UNWATCHED"
 
 # SPEC §9 A46. What we believe a queued command looks like on the wire. The
 # device has never been sent one, so this pattern is the assumption under test.

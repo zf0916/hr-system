@@ -102,14 +102,28 @@ class Gate:
         mapping = write_mapping(workdir / f"{label}.toml", top, columns)
         with Session() as session:
             try:
-                if not keep_hr_entry:
-                    # Every case below tests the list itself. HR entry blocks a
-                    # --replace on purpose (SPEC §5), and the case that proves
-                    # that asks for it by name; the rest start from a database
-                    # with none. Rolled back like everything else here.
+                if keep_hr_entry:
+                    # The case that proves a --replace is refused while HR
+                    # entry exists needs one leave record to exist. It makes
+                    # its own, here, inside the transaction that is rolled
+                    # back — **never against whatever HR has typed.** A leave
+                    # record is a form somebody signed; it is not rebuildable
+                    # from anything, and a gate that clears the table to make
+                    # room for itself destroys exactly the data this case is
+                    # about (SPEC §5, §6).
+                    session.execute(text(
+                        "INSERT INTO leave_record (employee_id, "
+                        "leave_type_code, sheet_code, period_from, period_to, "
+                        "days, entered_by) SELECT id, 'ANNUAL', 'AL', "
+                        "'2026-08-24', '2026-08-24', 1, 'gate' FROM employee "
+                        "LIMIT 1"))
+                else:
+                    # Every other case tests the list itself and starts from a
+                    # database with no HR entry in the way. Rolled back like
+                    # everything else here.
                     session.execute(text("DELETE FROM gate_pass"))
                     session.execute(text("DELETE FROM leave_record"))
-                    session.flush()
+                session.flush()
                 if preload:
                     run_import(session, FIXTURE,
                                write_mapping(workdir / f"{label}-pre.toml"),
@@ -322,31 +336,18 @@ def main() -> int:
     print("\n-- HR entry is not cleared with the employee list (SPEC §5)")
     with tempfile.TemporaryDirectory() as directory:
         work = Path(directory)
-        with Session() as session:
-            # One leave record, typed off a form, against the loaded list.
-            session.execute(text("DELETE FROM gate_pass"))
-            session.execute(text("DELETE FROM leave_record"))
-            session.execute(text(
-                "INSERT INTO leave_record (employee_id, leave_type_code, "
-                "sheet_code, period_from, period_to, days, entered_by) "
-                "SELECT id, 'ANNUAL', 'AL', '2026-08-24', '2026-08-24', 1, "
-                "'gate' FROM employee LIMIT 1"))
-            session.commit()
-        try:
-            gate.must_fail(
-                work, "--replace is refused while HR entry exists",
-                expected="cannot be rebuilt from anything",
-                keep_hr_entry=True)
-            # The same import, with the leave record out of the way: it is the
-            # HR entry that refuses it, not anything about the list.
-            gate.must_pass(
-                work, "and the same --replace runs once the HR entry is gone", 8,
-                keep_hr_entry=False)
-        finally:
-            with Session() as session:
-                session.execute(text("DELETE FROM leave_record WHERE "
-                                     "entered_by = 'gate'"))
-                session.commit()
+        # Both cases make and discard their own leave record inside the
+        # transaction. **Nothing here commits**, so HR's own entry — which
+        # exists on paper and nowhere else — is not touched.
+        gate.must_fail(
+            work, "--replace is refused while HR entry exists",
+            expected="cannot be rebuilt from anything",
+            keep_hr_entry=True)
+        # The same import, with the leave record out of the way: it is the
+        # HR entry that refuses it, not anything about the list.
+        gate.must_pass(
+            work, "and the same --replace runs once the HR entry is gone", 8,
+            keep_hr_entry=False)
 
     print("\n-- a device PIN the hardware cannot hold (SPEC §2, §10)")
     with tempfile.TemporaryDirectory() as directory:

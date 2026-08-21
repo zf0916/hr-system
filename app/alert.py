@@ -50,12 +50,19 @@ PUNCH = "punch"
 RAISED = "raised"
 CLEARED = "cleared"
 
+# A50 — what a serial invented by a gate or a fixture looks like, so the
+# unwatched list stays a list of devices. `GATE-` is the convention going
+# forward; the four bare names are already in the append-only raw layer from
+# before it existed and cannot be removed from there.
+FIXTURE_SERIAL_PATTERN = r"^(GATE-|GATE$|TEST$|CHECK$|NOTALLOWLISTED9$)"
+
 DEFAULTS = {
     "alert.contact_silence_minutes": "15",
     "alert.punch_silence_minutes": "180",
     "alert.punch_expected_after_minutes": "60",
     "alert.check_punches_when_closed": "no",
     "alert.watch_only_after_first_contact": "yes",
+    "alert.fixture_serial_pattern": FIXTURE_SERIAL_PATTERN,
 }
 
 
@@ -254,8 +261,26 @@ def check(session, now: dt.datetime | None = None) -> list[DeviceStatus]:
     ]
 
 
+def is_fixture_serial(session, serial: str) -> bool:
+    """Is this serial one a gate or a fixture invented, rather than a device?
+
+    **The pattern is a row** (`alert.fixture_serial_pattern`), because it is an
+    assumption about what a real serial can look like and this system does not
+    hold assumptions as constants (SPEC §13). An UPDATE widens or narrows it.
+
+    The convention it encodes: **a serial a tool invents begins with `GATE-`.**
+    The four bare names are the ones already in the raw layer from before the
+    convention existed — that layer is append-only, so they are permanent and
+    the rule has to name them rather than tidy them away.
+    """
+    import re
+
+    pattern = thresholds(session).get("alert.fixture_serial_pattern", "")
+    return bool(pattern) and re.match(pattern, serial or "") is not None
+
+
 def unwatched_serials(session) -> list[tuple[str, dt.datetime, int]]:
-    """Serials that have pushed but are not on the allowlist.
+    """Serials that have pushed but are not on the allowlist — devices only.
 
     **This is the hole the alert would otherwise have.** The check watches the
     allowlist, so a real device that nobody added is a device nobody is
@@ -264,6 +289,12 @@ def unwatched_serials(session) -> list[tuple[str, dt.datetime, int]]:
     which is right for the receiver and wrong to leave unsaid here.
 
     Reported, never alarmed on: a stray probe should not page anybody.
+
+    **Fixture serials are not on this list.** A list whose job is to catch one
+    real unwatched device is worthless once it holds five names from the test
+    tools — the reader learns to skip it, and the day a real serial appears
+    there, they skip that too. They are counted rather than dropped, by
+    `suppressed_fixtures`, so the filtering is never invisible.
     """
     allowlisted = set(session.scalars(select(Device.serial_number)))
     rows = session.execute(
@@ -277,7 +308,24 @@ def unwatched_serials(session) -> list[tuple[str, dt.datetime, int]]:
         .order_by(func.max(RawRequest.received_at).desc())
     ).all()
     return [(serial, last, count) for serial, last, count in rows
-            if serial not in allowlisted]
+            if serial not in allowlisted and not is_fixture_serial(session, serial)]
+
+
+def suppressed_fixtures(session) -> list[tuple[str, dt.datetime, int]]:
+    """The fixture serials `unwatched_serials` left out, so a count can be shown."""
+    allowlisted = set(session.scalars(select(Device.serial_number)))
+    rows = session.execute(
+        select(
+            RawRequest.serial_number,
+            func.max(RawRequest.received_at),
+            func.count(),
+        )
+        .where(RawRequest.serial_number.is_not(None))
+        .group_by(RawRequest.serial_number)
+        .order_by(func.max(RawRequest.received_at).desc())
+    ).all()
+    return [(serial, last, count) for serial, last, count in rows
+            if serial not in allowlisted and is_fixture_serial(session, serial)]
 
 
 def latest_state(session, serial: str, kind: str) -> str:

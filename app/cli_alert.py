@@ -26,7 +26,15 @@ import os
 import sys
 from pathlib import Path
 
-from app.alert import CONTACT, check, history, record, thresholds, unwatched_serials
+from app.alert import (
+    CONTACT,
+    check,
+    history,
+    record,
+    suppressed_fixtures,
+    thresholds,
+    unwatched_serials,
+)
 from app.db import Session
 
 STATUS_FILE_ENV = "ALERT_STATUS_FILE"
@@ -93,6 +101,17 @@ def cmd_check(args) -> int:
                     f"{last.isoformat(sep=' ', timespec='seconds')}. "
                     "`hr devices add` to watch it")
 
+        # **Counted, not hidden.** The fixtures are kept off the list above so
+        # that a real unwatched device stands alone on it — but a filter nobody
+        # can see is a filter nobody can check, and the day the pattern is too
+        # wide this line is what says so.
+        fixtures = suppressed_fixtures(session)
+        if fixtures:
+            lines.append(
+                f"({len(fixtures)} fixture serial(s) not listed: gates and "
+                f"fixtures, matching {thresholds(session)['alert.fixture_serial_pattern']}"
+                " — `hr alert fixtures` lists them)")
+
         alarming = [s for s in statuses if s.alarming]
         if args.status_file or os.environ.get(STATUS_FILE_ENV):
             _write_status_file(
@@ -125,6 +144,32 @@ def cmd_check(args) -> int:
             # outage, and the only place it would otherwise show is a table.
             for row in written:
                 print(f"{row.serial_number}: {row.kind} {row.state} — {row.detail}")
+    return 0
+
+
+def cmd_fixtures(args) -> int:
+    """What the unwatched list suppresses, and by what rule.
+
+    Kept a command rather than a footnote: the filter that keeps the alert
+    readable is also the filter that could hide a real device, and it should be
+    possible to look straight at it.
+    """
+    with Session() as session:
+        pattern = thresholds(session)["alert.fixture_serial_pattern"]
+        print(f"alert.fixture_serial_pattern = {pattern}")
+        print("a serial a gate or a fixture invents begins with GATE-. The "
+              "bare names are older than that convention and are permanent in "
+              "the append-only raw layer (SPEC §9 A50)\n")
+        rows = suppressed_fixtures(session)
+        if not rows:
+            print("no fixture serial has ever pushed")
+            return 0
+        print(f"{'serial':<18}{'requests':>9}  last seen")
+        for serial, last, count in rows:
+            print(f"{serial:<18}{count:>9}  "
+                  f"{last.isoformat(sep=' ', timespec='seconds')}")
+        print(f"\n{len(rows)} serial(s), kept off `hr alert check` so that one "
+              "real unwatched device would stand alone there")
     return 0
 
 
@@ -167,3 +212,10 @@ def add_parsers(sub) -> None:
         "history", help="every time an alert was raised or cleared")
     hist.add_argument("--limit", type=int, default=40)
     hist.set_defaults(func=cmd_history)
+
+    fixtures = commands.add_parser(
+        "fixtures",
+        help="the serials the unwatched list leaves out, and the row that says "
+             "which they are",
+    )
+    fixtures.set_defaults(func=cmd_fixtures)

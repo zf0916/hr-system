@@ -144,11 +144,11 @@ def main() -> int:
 
     print("\n-- a device path on the HR port is a 404, by asking")
     for method, path, body in (
-        ("GET", "/iclock/cdata?SN=GATE&options=all", b""),
-        ("POST", "/iclock/cdata?SN=GATE&table=ATTLOG&Stamp=9999",
+        ("GET", "/iclock/cdata?SN=GATE-SERVING&options=all", b""),
+        ("POST", "/iclock/cdata?SN=GATE-SERVING&table=ATTLOG&Stamp=9999",
          b"1\t2026-08-21 08:00:00\t255\t15\t0\t0\t0\t0\t0\t0\t\r\n"),
-        ("GET", "/iclock/getrequest?SN=GATE", b""),
-        ("POST", "/iclock/devicecmd?SN=GATE", b"ID=1&Return=0&CMD=REBOOT"),
+        ("GET", "/iclock/getrequest?SN=GATE-SERVING", b""),
+        ("POST", "/iclock/devicecmd?SN=GATE-SERVING", b"ID=1&Return=0&CMD=REBOOT"),
         ("GET", "/iclock/anything/at/all", b""),
     ):
         answer = ask(args.host, args.hr_port, method, path, body)

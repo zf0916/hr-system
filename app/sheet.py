@@ -1,13 +1,13 @@
 """Step 7: the Daily Workers Attendance sheet, in HR's existing layout.
 
-**One render, two outputs.** `render` builds the sheet once, from the daily
-attendance rows, and both emitters draw that same object: `to_text` for the
-screen, which is the system, and `to_excel` for the file, which is the record
-HR files (SPEC §7). Every mark a reader can see — the tick, the out-of-schedule
-time, the manual asterisk, whether a column is shaded — is decided here and
-carried on the cell. **The emitters choose fonts and column widths and nothing
-else**, which is what makes it impossible for the file and the screen to
-disagree about what a day says.
+**One render, three outputs.** `render` builds the sheet once, from the daily
+attendance rows, and every emitter draws that same object: `to_text` for a
+terminal, `to_json` for the browser — the screen, which is the system — and
+`to_excel` for the file, which is the record HR files (SPEC §7). Every mark a
+reader can see — the tick, the out-of-schedule time, the manual asterisk,
+whether a column is shaded — is decided here and carried on the cell. **The
+emitters choose fonts and column widths and nothing else**, which is what makes
+it impossible for the file and the screen to disagree about what a day says.
 
 What a cell holds (SPEC §7): a tick when the punch is on schedule, the actual
 punch time when it is outside it, or a leave code. **Leave takes the cell when
@@ -98,6 +98,10 @@ class Sheet:
     cells: dict[tuple[int, dt.date], Cell]
     legend: list[tuple[str, str]]
     notes: list[str] = field(default_factory=list)
+    # How many cells say something that rests on a schedule row HR has never
+    # confirmed. Counted at render, so the screen, the file and the text output
+    # all quote the same number rather than each counting for themselves.
+    provisional_cells: int = 0
 
     def cell(self, employee_id: int, day: dt.date) -> Cell:
         return self.cells[(employee_id, day)]
@@ -129,6 +133,27 @@ def period_for(session, month: str) -> tuple[dt.date, dt.date]:
     end_month = start.replace(day=28) + dt.timedelta(days=4)
     end = end_month - dt.timedelta(days=end_month.day)
     return start, end
+
+
+def resolve_period(session, month: str | None = None, start=None,
+                   end=None) -> tuple[dt.date, dt.date]:
+    """A month name, or two dates, into the period one render covers.
+
+    One resolver for every caller — the terminal, the browser and the download
+    — so that "August" cannot mean one span on the screen and another in the
+    file. Dates may be `date` objects or `YYYY-MM-DD` strings.
+    """
+    if month:
+        return period_for(session, month)
+    if not (start and end):
+        raise ValueError("give a month as YYYY-MM, or both a start and an end")
+
+    def as_date(value):
+        if isinstance(value, dt.date):
+            return value
+        return dt.datetime.strptime(value, "%Y-%m-%d").date()
+
+    return as_date(start), as_date(end)
 
 
 def _cell_for(row: DailyAttendance | None, employee_id: int, day: dt.date,
@@ -312,10 +337,20 @@ def render(session, start: dt.date, end: dt.date,
         for column in columns
     }
 
-    if any(cell.provisional for cell in cells.values()):
+    # A cell resting on an unconfirmed schedule is only worth counting when it
+    # says something the schedule decided. A blank day and a leave code say
+    # nothing about a schedule; **a tick is the claim "this was on time"**, and
+    # an out-of-schedule time is the claim "this was not".
+    provisional_cells = sum(
+        1 for cell in cells.values()
+        if cell.provisional and cell.kind in (TICK, TIME)
+    )
+    if provisional_cells:
         notes.append(
-            "Times and lateness on this sheet rest on schedule rows HR has not "
-            "confirmed. Every seeded schedule is marked provisional."
+            f"{provisional_cells} cell(s) rest on schedule rows HR has not "
+            "confirmed: every tick and every out-of-schedule time on this "
+            "sheet was decided against a provisional schedule. The punch times "
+            "are real; whether they are late is arithmetic on a guess."
         )
     if any(column.provisional_holiday for column in columns):
         notes.append("Some holidays on this calendar are provisional.")
@@ -348,6 +383,7 @@ def render(session, start: dt.date, end: dt.date,
         cells=cells,
         legend=legend_rows(session),
         notes=notes,
+        provisional_cells=provisional_cells,
     )
 
 
@@ -435,10 +471,136 @@ def to_text(sheet: Sheet, width: int | None = None) -> str:
     return "\n".join(out)
 
 
+# ---- the browser --------------------------------------------------------
+
+
+def to_json(sheet: Sheet) -> dict:
+    """The same object again, as plain data for the browser.
+
+    **A third emitter, not a second render.** Everything a screen can show is
+    carried on the Cell already — the text, what kind of thing it is, whether a
+    person entered it, whether it rests on a provisional schedule — so this
+    function reads fields and formats dates and does nothing else. The browser
+    cannot compute a different answer from the file because it is never given
+    the ingredients, only the answer (SPEC §7).
+
+    Cells are keyed `"{employee_id}:{date}"`, because JSON has no tuple.
+    """
+    return {
+        "title": sheet.title,
+        "period_start": sheet.period_start.isoformat(),
+        "period_end": sheet.period_end.isoformat(),
+        "note_top_left": sheet.note_top_left,
+        "note_is_unread": sheet.note_is_unread,
+        "rows_per_page": sheet.rows_per_page,
+        "page_count": sheet.page_count,
+        "headcount": sheet.headcount,
+        "provisional_cells": sheet.provisional_cells,
+        "columns": [
+            {
+                "date": column.date.isoformat(),
+                "day": column.day,
+                "weekday": column.weekday,
+                "shaded": column.shaded,
+                "shade_reason": column.shade_reason,
+                "holiday_name": column.holiday_name,
+                "rest_for": list(column.rest_for),
+                "provisional_holiday": column.provisional_holiday,
+            }
+            for column in sheet.columns
+        ],
+        "rows": [
+            {
+                "employee_id": row.employee_id,
+                "employee_number": row.employee_number,
+                "name": row.name,
+                "section_code": row.section_code,
+                "role_code": row.role_code,
+                "group_code": row.group_code,
+                "page": row.page,
+            }
+            for row in sheet.rows
+        ],
+        "cells": {
+            f"{employee_id}:{day.isoformat()}": {
+                "text": cell.text,
+                "kind": cell.kind,
+                "manual": cell.manual,
+                "leave_code": cell.leave_code,
+                "punch_count": cell.punch_count,
+                "late_minutes": cell.late_minutes,
+                "provisional": cell.provisional,
+                "detail": cell.detail,
+            }
+            for (employee_id, day), cell in sheet.cells.items()
+        },
+        "legend": [{"code": code, "label": label}
+                   for code, label in sheet.legend],
+        "notes": list(sheet.notes),
+    }
+
+
 # ---- the file -----------------------------------------------------------
 
 
 def to_excel(sheet: Sheet, path) -> None:
+    """Write the record to a file. The bytes come from `to_bytes`."""
+    from pathlib import Path as _Path
+
+    _Path(path).write_bytes(to_bytes(sheet))
+
+
+def to_bytes(sheet: Sheet) -> bytes:
+    """The record, as bytes. **The same period always produces the same file.**
+
+    One function makes the file, so the browser's download and `hr sheet
+    export` cannot be two different files that merely look alike — the download
+    is these bytes, unaltered.
+
+    Byte-for-byte reproducibility is not decoration. The Excel file is the
+    filed record (SPEC §7), and a filed record you cannot compare against a
+    fresh render is a record you have to take on trust. Two things would
+    otherwise vary with the clock: the archive's per-member timestamps, and the
+    created/modified stamps openpyxl writes into the document properties. Both
+    are pinned below — **the file is stamped with the period it covers, not
+    with the moment somebody exported it**, which is also the truer statement
+    of what the file is.
+    """
+    import io
+    import zipfile
+
+    from openpyxl.writer.excel import ExcelWriter
+
+    workbook = _build_workbook(sheet)
+    # The document's own timestamps describe the period, never the export.
+    stamp = dt.datetime.combine(sheet.period_end, dt.time(0, 0))
+    workbook.properties.created = stamp
+    workbook.properties.modified = stamp
+
+    # `workbook.save()` overwrites `modified` with the clock on its way past,
+    # so the archive is written through openpyxl's writer instead — the same
+    # writer `save()` uses, with the one line that reaches for the time left
+    # out.
+    buffer = io.BytesIO()
+    ExcelWriter(
+        workbook,
+        zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED, allowZip64=True),
+    ).save()
+
+    # Each archive member is also stamped with the current local time. Rewrite
+    # them at a fixed instant, in the order openpyxl produced them.
+    original = zipfile.ZipFile(io.BytesIO(buffer.getvalue()))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+        for member in original.infolist():
+            fixed = zipfile.ZipInfo(member.filename, date_time=(1980, 1, 1, 0, 0, 0))
+            fixed.compress_type = member.compress_type
+            fixed.external_attr = member.external_attr
+            archive.writestr(fixed, original.read(member.filename))
+    return out.getvalue()
+
+
+def _build_workbook(sheet: Sheet):
     """The record. The same object as the screen, drawn into HR's layout.
 
     Every string written here comes off the Sheet. Fonts, widths and fills are
@@ -536,7 +698,7 @@ def to_excel(sheet: Sheet, path) -> None:
         f"A1:{worksheet.cell(1, last_column).column_letter}"
         f"{note_row + len(sheet.legend) + len(sheet.notes) + 2}"
     )
-    workbook.save(path)
+    return workbook
 
 
 def page_layout(sheet: Sheet) -> dict:

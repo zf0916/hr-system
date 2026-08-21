@@ -461,9 +461,12 @@ def main() -> int:
     ):
         gate.check(module not in imported, f"{why}: app/alert.py does not import "
                                            f"{module}", f"imports {sorted(imported)}")
+    # `re` earns its place: the row that says which serials are a gate's own
+    # is a pattern, and matching it is the whole of what `re` is used for here.
     gate.check(imported <= {"__future__", "datetime", "dataclasses", "zoneinfo",
-                            "sqlalchemy", "app"},
-               "it imports the database and the clock, and nothing else",
+                            "sqlalchemy", "app", "re"},
+               "it imports the database, the clock and a pattern matcher, and "
+               "nothing else",
                f"imports {sorted(imported)}")
 
     print(f"\n{gate.checks} checks")

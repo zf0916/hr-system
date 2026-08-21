@@ -6,7 +6,8 @@ and nothing reads it back — the file goes one way (SPEC §7, §13).
 
 `detail` is the per-day punch detail §7 requires: one employee, one period,
 every day of it. It is what Accounts reads instead of the punch card, and it is
-not a second sheet — it renders no cells, no shading and no pages.
+not a second sheet — it renders no cells, no shading and no pages. It is built
+in `app.detail`, which the browser's detail screen also draws.
 """
 
 from __future__ import annotations
@@ -15,11 +16,11 @@ import datetime as dt
 import sys
 from pathlib import Path
 
-from app.attendance import days_for
-from app.corrections import employee_by_number, punches_for
+from app.corrections import employee_by_number
 from app.db import Session
-from app.schedule import effective_holiday
-from app.sheet import period_for, render, to_excel, to_text
+from app.detail import render_detail
+from app.detail import to_text as detail_text
+from app.sheet import render, resolve_period, to_excel, to_text
 
 
 def parse_date(text: str) -> dt.date:
@@ -27,11 +28,7 @@ def parse_date(text: str) -> dt.date:
 
 
 def _period(session, args) -> tuple[dt.date, dt.date]:
-    if args.month:
-        return period_for(session, args.month)
-    if not (args.start and args.end):
-        raise ValueError("give --month YYYY-MM, or both --from and --to")
-    return parse_date(args.start), parse_date(args.end)
+    return resolve_period(session, args.month, args.start, args.end)
 
 
 def cmd_render(args) -> int:
@@ -59,7 +56,8 @@ def cmd_export(args) -> int:
     print(f"wrote {out}")
     print(f"  {sheet.headcount} employees, {len(sheet.columns)} days, "
           f"{sheet.page_count} page(s)")
-    print("  the same render as the screen — one layout, two outputs (SPEC §7)")
+    print("  the same render the screen draws — one layout, every "
+          "output (SPEC §7)")
     print("  export only: nothing reads this file back in (SPEC §13)")
     for note in sheet.notes:
         print(f"  note: {note}")
@@ -68,64 +66,22 @@ def cmd_export(args) -> int:
 
 def cmd_detail(args) -> int:
     """One employee, one period, every day of it — punch times, leave codes and
-    manual punches in one view. This is what replaces reading the punch card."""
+    manual punches in one view. This is what replaces reading the punch card.
+
+    The view is built in `app.detail` and drawn here, which is the same
+    arrangement as the sheet: **the terminal and the browser draw one object,
+    so a figure cannot differ between them** (SPEC §7).
+    """
     start, end = parse_date(args.start), parse_date(args.end)
     with Session() as session:
         try:
             employee = employee_by_number(session, args.employee)
+            built = render_detail(session, employee, start, end,
+                                  with_punches=args.punches)
         except ValueError as exc:
             print(f"refused: {exc}", file=sys.stderr)
             return 1
-        rows = {row.attendance_day: row for row in
-                days_for(session, employee.id, start, end)}
-
-        print(f"{employee.employee_number}   {start} → {end}")
-        print("per-day punch detail — what Accounts reads instead of the punch "
-              "card (SPEC §7)")
-        print(f"\n{'date':<12}{'day':<5}{'first in':<10}{'last out':<10}"
-              f"{'late':>6}  {'leave':<7}punches")
-        day = start
-        while day <= end:
-            row = rows.get(day)
-            holiday = effective_holiday(session, day)
-            marks = []
-            if row is not None and row.is_rest_day:
-                marks.append("rest day")
-            if holiday:
-                marks.append(holiday.name + ("" if holiday.closes else " (worked)"))
-            first = last = late = ""
-            leave = "-"
-            if row is not None:
-                first = row.first_in.strftime("%H:%M") if row.first_in else ""
-                if row.first_in_manual:
-                    first += "*"
-                last = row.last_out.strftime("%H:%M") if row.last_out else ""
-                if row.last_out_manual:
-                    last += "*"
-                late = "" if row.late_minutes is None else str(row.late_minutes)
-                if row.schedule_provisional and late:
-                    late += "p"
-            print(f"{str(day):<12}{day.strftime('%a'):<5}{first:<10}{last:<10}"
-                  f"{late:>6}  {leave:<7}"
-                  + (f"{row.punch_count}" if row else "-")
-                  + (f"   {'; '.join(marks)}" if marks else ""))
-            if args.punches and row is not None and row.punch_count:
-                seen: set = set()
-                for record in punches_for(session, employee.id, day):
-                    counted = "counted"
-                    if not record.manual and record.at in seen:
-                        counted = "copy, not counted"
-                    elif not record.manual:
-                        seen.add(record.at)
-                    who = f"  {record.who}" if record.who else ""
-                    print(f"            {record.at}  {record.source:<15}"
-                          f"{counted:<18}{who}")
-            day += dt.timedelta(days=1)
-
-        print("\n* entered by a person, not the device (SPEC §3)")
-        print("p late minutes measured against a provisional schedule row")
-        print("leave is step 5: the column exists and is empty, and nothing "
-              "here invents a code")
+        print(detail_text(built, with_punches=args.punches))
     return 0
 
 

@@ -40,9 +40,9 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 |**4**|**Corrections** — guard entry and HR retroactive entry, both marked and counted|A guard entry cannot be given a time; an HR entry can|
 |**5**|**HR entry** — leave and gate pass, from the paper forms HR already receives|Codes appear on the generated sheet — **built**|
 |**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it — **built; the rows exist and a total is a query away**|
-|**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7) — **built; leave codes wait on step 5**|
+|**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7) — **built; leave codes appear, and the browser draws the same render**|
 |**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device — **the queue is built and carries REBOOT and CHECK; user push waits on the formats being real**|
-|**10**|**The screen** — the HR interface and the guard's one screen, in seven pieces|Each piece has its own gate; piece 1 is the serving shape|
+|**10**|**The screen** — the HR interface and the guard's one screen, in seven pieces|Each piece has its own gate; **pieces 1 and 2 are built** — the serving shape, then the read-only screens|
 |**9**|**Ingestion alert** — warns when punches stop arriving|Silence for N hours raises a warning — **built; contact silence and punch silence are separate, both rows**|
 
 **Then: demo to HR, walking the assumed values line by line while the software is on screen.**
@@ -85,7 +85,23 @@ What it produces across the 54 employees who have a PIN: two punches on most wor
 
 `tools/serving_gate.py` is 31 checks, and it asks both ports the way a device and a browser would. Broken on purpose, two ways: **mounting the receiver into the HR app and removing the refusal** put a live handshake on the tunnel's port — `GET OPTION FROM: GATE` — and six checks failed; **mounting it while leaving the refusal in front of it** answers `404` correctly and is still caught, because the interface must not so much as import the receiver. An app that imports it is one reordering away from serving it.
 
-The seven pieces, in order: **1 serving shape** · 2 read-only screens (employee list, the sheet, per-day detail, the Excel download) · 3 the guard screen · 4 leave entry · 5 gate pass entry · 6 HR corrections · 7 the demo pass.
+The seven pieces, in order: **1 serving shape** · **2 read-only screens** · 3 the guard screen · 4 leave entry · 5 gate pass entry · 6 HR corrections · 7 the demo pass.
+
+**Step 10, piece 2 is built: the read-only screens.** The employee list on a date, the sheet, one employee's period in detail, and the Excel download. **Nothing in this piece writes.** Three screens and one file, and every one of them is a face on a function `hr` already calls: `app/screens.py` is the only part of the application the HTTP layer imports, and it hands back finished answers.
+
+**The sheet screen is §7's screen, and it is the same render as the file.** `app.sheet.render` builds the sheet once; `to_text` draws it for a terminal, `to_json` for the browser and `to_excel` for the file. **The browser is given the answer, never the ingredients** — a cell arrives as text with its kind, whether a person entered it, and whether it rests on a provisional schedule already decided.
+
+**The Excel file became reproducible, and had to.** Two exports of one period used to differ, because openpyxl stamps the archive and the document with the clock. They now carry the period's own date instead, so **the same period always exports to the same bytes** — which is what makes "the download is the filed record" a thing that can be checked rather than asserted. The download is those exact bytes.
+
+**Two presentation questions, answered by looking at a screen.** *Does the leave screen say the day count is the form's?* Yes, on its face: the detail screen prints "1.50 days, as the form states", and where that differs from the range it adds "over a 2-day range. The form's number is the one that counts." Both numbers, neither hidden — a reader shown only one of them eventually corrects the wrong one. *How prominent is the provisional warning?* A banner above the grid saying how many cells rest on unconfirmed schedules — 1,349 of them in August — **and every one of those cells is marked where it stands.** A banner alone lets somebody carry one number away and leave the warning behind; a tick is the claim "this was on time", and that claim is the provisional part.
+
+**What the screen cannot carry, said rather than dropped:** only how the file prints — page breaks, the repeating header rows, landscape fitted to one page wide, the legend's own page. The screen scrolls and says so under the grid. Every mark a reader interprets is on both.
+
+**`tools/screens_gate.py` is 83 checks**, and it reads the page out of a real browser — Chromium's own `--dump-dom` inside the Playwright image, no driver package and nothing installed at run time. Broken on purpose, four ways: **the browser truncating a two-time cell** to its first half changed ten cells and was caught only by the DOM check, which is the whole reason that check exists; **dropping the deterministic write** made two exports differ and the download stop matching; **a loop and an import added to a route handler** failed the import check and the AST check together; **widening the fixture-serial pattern** to `^(GATE|TEST|CHECK|NOT|PYA)` made the real device look like a fixture and failed on its serial by name.
+
+**One of those breaks passed the first time and should not have.** The rebuilt image had not reached the container, so the gate read the old page and agreed with it. The bundle is now checked for the change before the failure is believed — a gate proven against a stale artefact proves nothing.
+
+**A gate serial is recognisable now.** Anything a tool invents begins with `GATE-` (SPEC §9 A50), the pattern is a row, and those serials are kept off `hr alert check`'s unwatched list — **counted on it instead**, with `hr alert fixtures` listing them. The list existed to catch one real device nobody was watching, and it had filled with five names from the test tools.
 
 **Step 5 is built.** `hr leave add` and `hr gatepass add` type what is on the two forms, and nothing else — no approval routed, no entitlement, no balance. The vocabularies are rows: seven ticks on the leave form, nine legend codes, four gate pass categories. **Three of the seven types carry a suggested sheet code and four carry none**, because the legend has no letter for them, and the screen offers nothing rather than the nearest guess (A48).
 
@@ -94,6 +110,8 @@ The seven pieces, in order: **1 serving shape** · 2 read-only screens (employee
 **The sheet shows leave codes now**, and its legend prints them from `leave_code` rows. A leave day with no sheet code falls through to whatever the punches say rather than blanking a day somebody actually worked (A49), and the sheet counts both kinds in its notes.
 
 **Reloading the employee list stopped being free.** `--replace` deletes employees, and a leave record or gate pass hangs off one — so it is refused while any HR entry exists, and the list is corrected in place instead. Daily attendance is still cleared with the list, because that is rebuilt from punches; typed forms are not rebuildable from anything.
+
+**The same rule binds the gates.** The import gate used to clear `leave_record` and commit, so that its own case could run — and it destroyed three real records doing it. **A gate makes its own leave record inside the transaction it rolls back, and commits nothing**, because a form somebody signed is not rebuildable from anything and a test fixture is a poor reason to lose one.
 
 `tools/hr_entry_gate.py` is 38 checks, and the import gate is 43. Broken on purpose: a record with no day count, a day count recomputed from the range, zero days, a record that says neither type nor code, typed hours, an in time before the out time, a category that is not one of the four, and a code sitting in a cell with no record behind it.
 
@@ -206,6 +224,15 @@ Run it:
     hr gatepass add --employee 9001 --date 2026-08-19 --category PERSONAL \
         --out 14:00 --in 16:30 --destination "..." --by "HR: ..."
     hr gatepass list --from 2026-08-01 --to 2026-08-31
+
+    # the screens, on the LAN or through Tailscale
+    http://<server>:8090/            # employees, on a date
+    http://<server>:8090/sheet?month=2026-08
+    http://<server>:8090/employee/0090?month=2026-08
+    uv run python tools/screens_gate.py        # 83 checks; reads the real DOM
+    uv run python tools/screens_gate.py --no-dom   # without Docker
+
+    hr alert fixtures                          # what the unwatched list omits
 
     hr sheet render --month 2026-08
     hr sheet export --month 2026-08 --out /tmp/attendance_2026-08.xlsx
