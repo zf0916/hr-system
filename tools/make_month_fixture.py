@@ -19,10 +19,21 @@ What it generates, across every employee who has a PIN:
   * night-shift employees punching out after midnight, so the attendance-day
     rule (SPEC §4) shows on the face of the sheet;
   * some days with one punch only, some with none;
-  * **nothing on a Sunday** — the rest day on every seeded schedule.
+  * **nothing on a Sunday** — the rest day on every seeded schedule;
+  * **and nothing on a day the calendar says the factory closes.** A shaded
+    National Day column with a full shift's punch times in it is not a
+    plausible month — it is a fixture that never asked the calendar. A
+    *gazetted* holiday the factory works is a different case and still gets
+    punches, because only the `closes` flag closes the factory (SPEC §4);
+  * **and nothing from somebody a leave record says was not there.** An `AL`
+    cell over a day the same employee punched in and out of is the same defect
+    one level down: a fixture describing something that did not happen. Leave
+    has to be recorded before this runs for that to work, which is the order
+    `tools/demo_stand.py` uses.
 
-**No leave.** Step 5 does not exist, no cell can hold a leave code, and this
-does not invent one.
+**This writes no leave and no gate pass.** It reads leave to know who was
+absent; the forms themselves are typed on the screens or by `hr leave add`,
+because a fixture that invented one would be inventing a signed form.
 
 It is deterministic: the same seed writes the same month. It adds to whatever is
 already captured and removes nothing — the raw layer is append-only.
@@ -44,8 +55,9 @@ from urllib.parse import urlencode
 from sqlalchemy import select
 
 from app.db import Session
+from app.hr_entry import leave_by_day
 from app.models import DeviceUserMap, Employee, EmployeeAssignment
-from app.schedule import is_rest_day, schedule_for
+from app.schedule import effective_holiday, is_rest_day, schedule_for
 
 SERIAL = "SIM0000000001"
 
@@ -63,6 +75,7 @@ class Person:
     employee_number: str
     pin: str
     group_code: str
+    employee_id: int = 0
     often_late: bool = False
     leaves_early: bool = False
     punches: list = field(default_factory=list)
@@ -72,7 +85,7 @@ def people(session, on_date: dt.date, rng: random.Random) -> list[Person]:
     """Everybody with a PIN in force, and the group they are in."""
     rows = session.execute(
         select(Employee.employee_number, DeviceUserMap.pin,
-               EmployeeAssignment.group_code)
+               EmployeeAssignment.group_code, Employee.id)
         .join(DeviceUserMap, DeviceUserMap.employee_id == Employee.id)
         .join(EmployeeAssignment,
               EmployeeAssignment.employee_id == Employee.id)
@@ -87,7 +100,8 @@ def people(session, on_date: dt.date, rng: random.Random) -> list[Person]:
         .order_by(Employee.employee_number)
     ).all()
 
-    found = [Person(number, pin, group) for number, pin, group in rows]
+    found = [Person(number, pin, group, employee_id)
+             for number, pin, group, employee_id in rows]
     # A few people who are late often enough to accumulate past the 30-minute
     # threshold, and a few who leave early. Chosen by the seed, not by name.
     for person in rng.sample(found, min(6, len(found))):
@@ -177,14 +191,32 @@ def main() -> int:
                   file=sys.stderr)
             return 1
 
+        # Who a leave record says was not there. Read once, keyed the way the
+        # sheet keys it — a punch on a day somebody was on leave is a fixture
+        # describing something that did not happen.
+        on_leave = set(leave_by_day(session, start, end))
+
         lines: list[str] = []
         working_days = 0
         rest_days = 0
+        closed_days: list[dt.date] = []
+        leave_days = 0
         stats = {"two": 0, "one": 0, "none": 0, "late": 0, "early": 0,
                  "after_midnight": 0}
 
         day = start
         while day <= end:
+            # **The calendar closes the factory, not the schedule.** A rest day
+            # is a column on the schedule row; a public holiday is a row in the
+            # calendar, and only its `closes` flag shuts the doors. Both are
+            # skipped here for the same reason: nobody was there to punch.
+            holiday = effective_holiday(session, day)
+            if holiday is not None and holiday.closes:
+                closed_days.append(day)
+                rest_days += 1
+                day += dt.timedelta(days=1)
+                continue
+
             day_had_work = False
             for person in staff:
                 schedule = schedule_for(session, person.group_code, day)
@@ -193,6 +225,9 @@ def main() -> int:
                 if is_rest_day(schedule, day):
                     continue
                 day_had_work = True
+                if (person.employee_id, day) in on_leave:
+                    leave_days += 1
+                    continue
                 times = punch_times(person, schedule, day, rng)
                 if not times:
                     stats["none"] += 1
@@ -220,10 +255,22 @@ def main() -> int:
             day += dt.timedelta(days=1)
 
     print(f"{len(staff)} employees with a PIN, {start} → {end}")
-    print(f"  {working_days} working days, {rest_days} rest days with nothing "
-          "on them")
+    print(f"  {working_days} working days, {rest_days} days with nothing on "
+          "them")
+    if closed_days:
+        print(f"  {len(closed_days)} of those "
+              f"{'is a day' if len(closed_days) == 1 else 'are days'} the "
+              "calendar closes the factory for: "
+              + ", ".join(str(d) for d in closed_days))
+    else:
+        print("  no day in this range is a closed holiday on the calendar — "
+              "load one before generating, or the month will have people "
+              "punching on a day the sheet shades")
     print(f"  {stats['two']} days with two punches, {stats['one']} with one, "
           f"{stats['none']} with none")
+    if leave_days:
+        print(f"  {leave_days} employee-day(s) skipped because a leave record "
+              "already covers them")
     print(f"  {stats['late']} late arrivals, {stats['early']} early departures, "
           f"{stats['after_midnight']} punches after midnight")
     print(f"  {len(lines)} punch lines in "

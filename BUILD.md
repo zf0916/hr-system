@@ -42,7 +42,7 @@ Milestone 4 is independent of the rest and can run any time once the privacy que
 |**6**|**Daily attendance** — first in, last out, late minutes, status per employee per day|Period totals are queries over it — **built; the rows exist and a total is a query away**|
 |**7**|**The sheet** — a screen and an Excel file in HR's existing layout, plus per-day punch detail|HR reads it instead of the punch card, and files the Excel copy (SPEC §7) — **built; leave codes appear, and the browser draws the same render**|
 |**8**|**Device control** — command queue, push users, set and clear fallback passwords, pending re-enrollment list|An employee created in the app appears on the device — **the queue is built and carries REBOOT and CHECK; user push waits on the formats being real**|
-|**10**|**The screen** — the HR interface and the guard's one screen, in seven pieces|Each piece has its own gate; **pieces 1 to 6 are built** — the serving shape, the read-only screens, the guard screen, leave entry, gate pass entry, HR corrections|
+|**10**|**The screen** — the HR interface and the guard's one screen, in seven pieces|Each piece has its own gate; **pieces 1 to 6 are built** — the serving shape, the read-only screens, the guard screen, leave entry, gate pass entry, HR corrections. **Piece 7, the demo pass, has been run and found seven things to fix before HR sees it**|
 |**9**|**Ingestion alert** — warns when punches stop arriving|Silence for N hours raises a warning — **built; contact silence and punch silence are separate, both rows**|
 
 **Then: demo to HR, walking the assumed values line by line while the software is on screen.**
@@ -85,7 +85,52 @@ What it produces across the 54 employees who have a PIN: two punches on most wor
 
 `tools/serving_gate.py` is 31 checks, and it asks both ports the way a device and a browser would. Broken on purpose, two ways: **mounting the receiver into the HR app and removing the refusal** put a live handshake on the tunnel's port — `GET OPTION FROM: GATE` — and six checks failed; **mounting it while leaving the refusal in front of it** answers `404` correctly and is still caught, because the interface must not so much as import the receiver. An app that imports it is one reordering away from serving it.
 
-The seven pieces, in order: **1 serving shape** · **2 read-only screens** · **3 the guard screen** · **4 leave entry** · **5 gate pass entry** · **6 HR corrections** · 7 the demo pass.
+The seven pieces, in order: **1 serving shape** · **2 read-only screens** · **3 the guard screen** · **4 leave entry** · **5 gate pass entry** · **6 HR corrections** · **7 the demo pass — run**.
+
+**Step 10, piece 7 is run: the demo pass. Nothing was built and seven things are now known to be wrong.** The whole system end to end, at real size, every gate, the simulator, an export and a read-back — and then the screens pressed in the order a demo would go.
+
+**Headcount is still unread, and the fixture cannot answer it.** `employees_punch_demo.xlsx` has 58 rows because that is how many punches there were to attach to; 55 of the names and numbers are invented. The one real datum is HR's own late coming record printing `090` and `1601` on one page, which bounds the numbers *issued* over the years and says nothing about the people employed now. **A39 stays.** So the rehearsal states its own size: `tools/make_size_fixture.py` writes a list of a stated size, numbers spread across 1–1600 with gaps, PINs carrying no leading zero, and the mapping file beside it. It goes in `import/`, is loaded onto a throwaway, and is never HR's list.
+
+**What real size costs, measured at 300 and at 600, on a database that was dropped afterwards.**
+
+|Step|58|300|600|
+|---|---|---|---|
+|Employee import|—|1.6s|2.5s|
+|A month of punches, through the receiver|—|14,701 lines / 736 pushes / 16s|29,443 lines / 1,473 pushes / 38s|
+|**`hr attendance build`, one month**|**53s** (1,798 rows)|**2m 44s** (9,300)|**5m 13s** (18,600)|
+|`hr sheet render`|0.9s|1.2s|1.3s|
+|`hr sheet export`|1.0s / 14 KB|1.6s / 43 KB|1.9s / 79 KB|
+|**`/api/sheet`, what the browser is sent**|0.3 MB / 0.14s|**1.5 MB** / 0.5s|**3.1 MB** / 0.7s|
+|The download|—|0.8s|1.2s|
+|Printed sheets of paper|3|11|21|
+
+**Only one thing scales badly, and it is the build.** About 17ms a row, one transaction, no progress output — so a schedule correction that moves a month is a five-minute wait at 600 people and around nine at a thousand. Everything else holds: the render and the export stay near a second because they are one query and one pass, the download is still byte-for-byte the exported file at every size, and **the read-back agrees with the render about every day for every employee at 600**.
+
+**The sheet screen draws the whole month for everybody** — 18,600 cells at 600 people, 3.1 MB of JSON, 1.6s to draw on a desktop over the compose network, and slower over the tunnel. At 1366px a reader sees 15 of 31 days and 19 rows at once; at 1024px, 9 days. **The employees screen has one control on it, a date box** — no search, no section filter, no sort — and at 600 rows the page is 20,000 pixels tall.
+
+**Seven of the defects it found are fixed, in the order they were asked for. Each one was then broken on purpose, and the gate failed.**
+
+1. **A manual punch that is neither the first in nor the last out is marked now.** The asterisk was keyed to `first_in_manual or last_out_manual`, so four punches on one day — two of them a guard's, at 11:02 and 11:03 — rendered as a bare tick with no fill in the Excel. **The day's own count decides it now**, in `sheet._manual`, and a cancelled correction is deliberately not in that count. **The gate found a second way out of the same never while it was being fixed**: a leave cell never carried the mark either, so a guard entry on a day HR later coded `AL` disappeared from the sheet entirely. A49 decides what a cell *says*; it does not decide whether the day says a person entered a punch. Broken on purpose, twice — the old condition failed three checks, and a file that lost the middle day's mark failed the readback.
+2. **The guard's Submit rebuilds the day.** `hr_corrections` had rebuilt the day it touched since piece 6 and `guard.record` called nothing that did, so the daily row went on saying three punches while four existed — and **the day detail listed all four under a count of three**, which is the shape of every figure that has not heard about a write. The guard gate now checks the row, its punch count against the punches themselves, and the sheet cell, immediately after `record` and with nothing else run. Broken on purpose: removing the rebuild failed all three.
+3. **A gate pass is on the day detail.** It was on no screen at all once saved — and the entry screen's confirmation offered *See 0090's 2026-08 in detail*, a button to a page the pass was not on. It now shows on its own date with its two times and its hours, and again in a list for the period. **The hours are read from the generated column**, never worked out: the gate presses that button and reads what it lands on, and a break that recomputed them from the two times was caught by the scale alone — `2.5` where the column says `2.50`.
+4. **Section is back on the sheet screen**, as the file's third column, frozen with the other three. The rows are ordered by section and the screen showed that order with nothing on it explaining the order. Broken on purpose, twice: pinning Role at the old offset put it `448px` over its neighbour, and dropping the heading failed the new check that the screen's identifying columns are the file's four, in the file's order.
+5. **A correction's time is stated to the second.** `_line` formatted `at` with no `timespec` while `recorded_at` beside it used seconds, so the dialog's own headline read *Cancel the correction of 2026-08-21 15:21:26.174929 for 0090?* **An HR retroactive punch could not have caught this** — its time is typed to the minute — so the gate now makes a guard entry, whose time is the server's own stamp, and reads the listing back.
+6. **The sheet prints the schedule it was measured against, in a block under the grid.** Per group: the shift with the crossed midnight said rather than inferred, the break, the grace period, the rest day, the attendance-day window, which schedule row it is and how many days of the period it covered — and **PROVISIONAL where it stands** rather than only in the banner above. **This is where A1, A2, A4, A30 and A31 stop being invisible**: every tick above means "inside these times" and every lateness figure is measured from this start plus this grace, and HR has never seen a single one of those numbers. One block, three outputs — the terminal, the browser and the filed file draw the same lines, and the readback compares them. It is on the file because it is what the marks mean, not how the file prints (§7). Broken on purpose, twice: a plausible `08:00–17:30 / grace 15 min` printed instead of the row failed two checks, and a file that dropped the block failed six and the readback with it.
+7. **`make_month_fixture` asks the calendar.** August 2026 had 53 of 58 people punching on a shaded National Day, because the fixture skipped rest days and never looked at holidays. It skips a day the calendar closes now — and **a gazetted holiday the factory works still gets punches**, because only the `closes` flag closes the factory. It also skips a day a leave record already covers, which was the same defect one level down: an `AL` cell over a day the same employee punched in and out of describes something that did not happen. **It still writes no leave and no gate pass**; it reads them to know who was absent.
+
+**The demo stands on its own database, and the working one is not opened to build it.** `tools/demo_stand.py up` creates `hr_demo` from the committed fixtures, pushes a plausible August through the receiver's own route, and types four leave records and one gate pass — **every one of them `entered by DEMO FIXTURE`**, so anything HR types during the demo is distinguishable from what was there before them. `down` drops it by name.
+
+**Why it needs its own database.** `0090` on the working database carries five leave records in August: the three identical inventions from piece 4's deliberate break, and two overlapping annual-leave records — 08-22→26 for 5 days by Aisyah, 08-24→26 for 3 days by Aslida — which between them claim eight days of annual leave over three days of calendar. Nothing there is a defect in the software; `leave_by_day` takes the lowest id and the detail screen honestly shows all five. **None of it can be deleted** (§13), and the answer to real history you would rather not demonstrate is to demonstrate somewhere else, not to start removing evidence.
+
+**And `0090` is off every placeholder.** It was printed in the employee box on leave entry, gate pass entry and both halves of corrections, and in the guard's — so it was the number anybody reached for, which is exactly how it became the number everyone had seen. The HR boxes say `four digits` and the guard's says `number or name`: **a shape cannot be typed by accident, and any four-digit example belongs to somebody.**
+
+**Parked, and it is the layout rather than the margins.** The printed sheet needs about **40%** to fit one page wide — 1,850pt of columns against roughly 734pt of printable A4 landscape, which prints Calibri 11 at about 4.4pt. An Excel footer carrying the month and a page number would put a legible line on a page whose grid is not legible, so **the footer, the page number and the paper size wait for HR's real sheet**, which settles A39, A40, A41 and the paper together. The stated page count also still leaves out the legend's own page — 2 where the printer produces 3 — and waits with them.
+
+**One thing the demo has to say rather than show.** A49's uncoded-leave case — a leave day with no legend letter, whose cell falls through to what the punches say — has no punches to fall through to on the demo stand, because the generator now skips a day leave already covers. The rule is on the day detail in words; the cell it produces is blank.
+
+**Every gate passes and the simulator exits clean: fifteen runs, 1,257 checks** — 46 more than the demo pass found them with, all of them checking a fix in front of a break that made them fail. `parser_gate` 240 · `adms_sim` 171 · `screens_gate` 133 · `leave_entry_gate` 105 · `corrections_screen_gate` 105 · `gate_pass_gate` 93 · `guard_gate` 84 · `sheet_gate` 72 · `alert_gate` 58 · `attendance_gate` 46 · `employee_import_gate` 44 · `hr_entry_gate` 38 · `serving_gate` 31 · `schedule_gate` 19 · `corrections_gate` 18. **Row counts before and after say the same thing they said in piece 6**: `raw_request` +31 and `parsed_punch` +84 from the simulator's thirty pushes and serving_gate's one real device question, one `device_command` for the unsolicited result, and **nothing else moved at all** — no leave record, no gate pass, no correction, no employee.
+
+**The working database was missing its calendar, and the demo would have shown it.** `holiday` was empty, so 31 August rendered as an ordinary Monday. `hr calendar import` is in the run block and had not been run against this database; it has now.
 
 **Step 10, piece 6 is built: HR corrections.** One page at `/corrections`, two acts, both through the functions `hr corrections retroactive` and `hr corrections cancel` call.
 
@@ -339,6 +384,17 @@ Run it:
 
     hr alert fixtures                          # what the unwatched list omits
 
+    # the demo pass at real size. Headcount is unread (A39), so the size is
+    # stated rather than assumed, and the list is never loaded on this database
+    uv run python tools/make_size_fixture.py --count 300 \
+        --out import/employees_size300.xlsx    # writes the mapping beside it
+
+    # the demo, on its own database, built from the fixtures. `0090` on this
+    # one carries five leave records that cannot be deleted (SPEC §13)
+    uv run python tools/demo_stand.py up       # http://127.0.0.1:8095/
+    uv run python tools/demo_stand.py status
+    uv run python tools/demo_stand.py down     # drops hr_demo by name
+
     hr sheet render --month 2026-08
     hr sheet export --month 2026-08 --out /tmp/attendance_2026-08.xlsx
     hr sheet detail --employee 0090 --from 2026-08-17 --to 2026-08-22 --punches
@@ -540,7 +596,7 @@ Cards and device run together for **at least one full 16th → 15th cycle**, two
 |**Is `AL` for Annual, `MC` for Sick and `UL` for Unpaid what HR actually writes on the sheet** (SPEC §9 A48)? **The leave entry screen shows it happening**: pressing *Annual* puts `AL` in the code box and says it is a suggestion, pressing *Maternity* puts nothing there and says the legend has no letter for it. A convenience on the screen, not a mapping — HR overrides it in front of us and the row records what they typed|HR|Nothing — the row records what HR typed|
 |Is there one leave card per leave type per employee, or one card covering all types? The card has no type column|HR|Nothing structural|
 |**What is the note in the top-left of the attendance sheet** (SPEC §9 A41)? A close-up photo may answer the schedule question. The sheet renders the cell empty and marked unread until it is read|HR|The sheet's top-left cell only|
-|**How many pages is the sheet, and what is headcount** (SPEC §9 A39)? 30 rows to a page is the assumption the renderer uses|HR|Page breaks on the printed sheet|
+|**How many pages is the sheet, and what is headcount** (SPEC §9 A39)? 30 rows to a page is the assumption the renderer uses. **The demo pass measured what that costs and could not answer it**: the fixture's 58 rows say nothing about the factory, and `1601` on HR's paper bounds the numbers issued rather than the people employed. At 30 to a page the printed sheet is 3 sheets of paper for 58, 11 for 300 and 21 for 600, and **the day columns fit only at about 40% scale** whatever the headcount|HR|Page breaks on the printed sheet, and how small it prints|
 |2026 public holidays including Melaka state|HR|Calendar|
 |**How early before a shift, and how late after it, does a punch still belong to that day?** (SPEC §9 A30). The seeded 240 minutes is a guess; real punches settle it|The first real capture|Daily attendance|
 |**Which group runs which shift** (SPEC §9 A31)? The seeded schedules are provisional and marked so in the database|HR|Schedule|

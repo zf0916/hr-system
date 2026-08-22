@@ -106,6 +106,15 @@ class CellReader(html.parser.HTMLParser):
         self.weekday_heads: list[str] = []
         self.grid_scroll: str | None = None
         self.list_headings: list[str] = []
+        # The identifying columns: their headings, and the section each row
+        # carries. The file has four of these and the screen must have the
+        # same four (SPEC §7).
+        self.identifying: list[str] = []
+        self.sections: dict[str, str] = {}
+        # The schedule block under the grid, keyed "GROUP:id".
+        self.schedules: dict[str, dict] = {}
+        self.schedule_provisional: set = set()
+        self._schedule: str | None = None
         self._open: tuple[str, dict] | None = None
         self._depth = 0
         self._text: list[str] = []
@@ -117,7 +126,9 @@ class CellReader(html.parser.HTMLParser):
             # nested inside it would otherwise be captured only as far as the
             # first `</...>`, and half a sentence usually still passes.
             self._depth += 1
-        if "data-cell" in attributes or "data-note" in attributes:
+        if ("data-cell" in attributes or "data-note" in attributes
+                or "data-identifying" in attributes
+                or "data-row-section" in attributes):
             self._open = (tag, attributes)
             self._depth = 0
             self._text = []
@@ -148,6 +159,17 @@ class CellReader(html.parser.HTMLParser):
             self.grid_scroll = attributes.get("class") or ""
         if "data-column-heading" in attributes:
             self.list_headings.append(attributes.get("class") or "")
+        if "data-schedule" in attributes:
+            self._schedule = attributes["data-schedule"]
+            self.schedules.setdefault(self._schedule, {})
+        if "data-schedule-provisional" in attributes and self._schedule:
+            self.schedule_provisional.add(self._schedule)
+        for key in ("data-shift", "data-break", "data-grace", "data-window"):
+            if key in attributes and self._schedule:
+                self._open = (tag, {**attributes, "_schedule": self._schedule,
+                                    "_field": key[len("data-"):]})
+                self._depth = 0
+                self._text = []
 
     def handle_data(self, data):
         if self._open is not None:
@@ -172,6 +194,13 @@ class CellReader(html.parser.HTMLParser):
             self.banner = text
         elif "data-note" in attributes:
             self.notes.append(text)
+        elif "data-identifying" in attributes:
+            self.identifying.append(text.strip())
+        elif "data-row-section" in attributes:
+            self.sections[attributes["data-row-section"]] = text.strip()
+        elif "_field" in attributes:
+            self.schedules.setdefault(attributes["_schedule"], {})[
+                attributes["_field"]] = text.strip()
         self._open = None
         self._text = []
 
@@ -420,9 +449,9 @@ def main() -> int:
         # An offset that is merely close pins the column *over* its neighbour
         # instead of beside it, and the days underneath disappear.
         offsets = [0]
-        for width in reader.column_widths[:2]:
+        for width in reader.column_widths[:3]:
             offsets.append(offsets[-1] + width)
-        for index in ("0", "1", "2"):
+        for index in ("0", "1", "2", "3"):
             cells = reader.frozen.get(index, [])
             gate.check(len(cells) == len(expected["rows"]) + 2,
                        f"column {index} is frozen in every row and both headers",
@@ -434,7 +463,61 @@ def main() -> int:
             gate.check(found == {str(offsets[int(index)])},
                        f"   pinned at {offsets[int(index)]}px — the exact width "
                        f"of the columns to its left",
-                       f"found {found}, columns are {reader.column_widths[:3]}")
+                       f"found {found}, columns are {reader.column_widths[:4]}")
+
+        # **The screen's identifying columns are the file's.** §7 lets the two
+        # differ only in how the file prints, and a column is not printing —
+        # the rows are ordered by section, and the screen showing that order
+        # with no section on it was an order with nothing explaining it.
+        gate.check(reader.identifying == ["No.", "Name", "Section", "Role"],
+                   "the screen's identifying columns are the file's four, in "
+                   "the file's order",
+                   f"found {reader.identifying}")
+        sections = {row["employee_number"]: row["section_code"]
+                    for row in expected["rows"]}
+        # **The schedule block, under the grid.** Every tick above means
+        # "inside these times" and every lateness figure is measured from this
+        # start plus this grace — §9's A1, A2, A4, A30 and A31, and until now
+        # visible only in their consequences.
+        gate.check(bool(reader.schedules),
+                   f"the sheet screen carries a schedule block "
+                   f"({len(reader.schedules)} row(s))",
+                   "there is no [data-schedule] on the page")
+        expected_schedules = {
+            f"{line['group_code']}:{line['schedule_id']}": line
+            for line in expected["schedules"]
+        }
+        gate.check(set(reader.schedules) == set(expected_schedules),
+                   "one line per schedule row the render actually used",
+                   f"screen {sorted(reader.schedules)} vs "
+                   f"render {sorted(expected_schedules)}")
+        for key, line in expected_schedules.items():
+            shown = reader.schedules.get(key, {})
+            gate.check(shown.get("shift") == line["shift"],
+                       f"   {key}: the shift as the render states it "
+                       f"({line['shift']})",
+                       f"the screen shows {shown.get('shift')!r}")
+            gate.check(shown.get("grace") == f"{line['grace_minutes']} min",
+                       f"   and the grace period (A4)",
+                       f"the screen shows {shown.get('grace')!r}")
+            gate.check(shown.get("window") == line["attendance_day_window"],
+                       f"   and the attendance-day window (A30)",
+                       f"the screen shows {shown.get('window')!r}")
+            gate.check(shown.get("break") == line["break"],
+                       f"   and the break, said even when the row has none",
+                       f"the screen shows {shown.get('break')!r}")
+        gate.check(all(key in reader.schedule_provisional
+                       for key, line in expected_schedules.items()
+                       if line["provisional"]),
+                   "and a provisional row says so where it stands, not only in "
+                   "the banner above",
+                   f"marked: {sorted(reader.schedule_provisional)}")
+
+        gate.check(reader.sections == sections,
+                   "and every one of them carries the section the render gave",
+                   f"{len(reader.sections)} on screen against {len(sections)}; "
+                   f"first difference "
+                   f"{next((k for k in sections if reader.sections.get(k) != sections[k]), None)!r}")
 
         gate.check(reader.day_heads
                    and all("top-0" in head for head in reader.day_heads),

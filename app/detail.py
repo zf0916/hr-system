@@ -33,7 +33,13 @@ from decimal import Decimal
 
 from app.attendance import days_for
 from app.corrections import punches_for
-from app.hr_entry import leave_by_day, leave_records, leave_types
+from app.hr_entry import (
+    categories,
+    gate_passes,
+    leave_by_day,
+    leave_records,
+    leave_types,
+)
 from app.models import Employee
 from app.schedule import effective_holiday
 
@@ -84,6 +90,7 @@ class DetailDay:
     leave_type_label: str | None = None
     leave_record_id: int | None = None
     punches: list[PunchLine] = field(default_factory=list)
+    gate_passes: list[GatePassLine] = field(default_factory=list)
 
 
 @dataclass
@@ -113,6 +120,28 @@ class LeaveLine:
 
 
 @dataclass
+class GatePassLine:
+    """A gate pass on a day in this period, as HR typed it off the paper.
+
+    **The hours are read, never worked out.** They are a generated column: the
+    database derives them from the two times and there is nowhere to type them
+    (SPEC §5). A view that recomputed them would be the second place they live,
+    which is the whole reason the column is generated.
+    """
+
+    record_id: int
+    date: dt.date
+    category_code: str
+    category_label: str | None
+    out_time: dt.time
+    in_time: dt.time
+    hours: Decimal
+    reason: str | None
+    destination: str | None
+    entered_by: str
+
+
+@dataclass
 class Detail:
     employee_number: str
     name: str
@@ -123,6 +152,7 @@ class Detail:
     period_end: dt.date
     days: list[DetailDay]
     leave: list[LeaveLine]
+    gate_passes: list[GatePassLine] = field(default_factory=list)
     provisional_days: int = 0
     manual_days: int = 0
 
@@ -156,6 +186,30 @@ def render_detail(session, employee: Employee, start: dt.date,
     leave_days = leave_by_day(session, start, end)
     labels = {row.code: row.label for row in leave_types(session)}
 
+    # **The gate passes HR typed off the paper** (SPEC §5). Until now a pass
+    # was on no screen at all once it was saved — the entry screen even offered
+    # a button to this page, and the pass was not on it. The hours come off the
+    # generated column; nothing here works them out.
+    category_labels = {row.code: row.label for row in categories(session)}
+    pass_lines = [
+        GatePassLine(
+            record_id=row.id,
+            date=row.pass_date,
+            category_code=row.category_code,
+            category_label=category_labels.get(row.category_code),
+            out_time=row.out_time,
+            in_time=row.in_time,
+            hours=row.hours,
+            reason=row.reason,
+            destination=row.destination,
+            entered_by=row.entered_by,
+        )
+        for row in gate_passes(session, employee.id, start, end)
+    ]
+    passes_by_day: dict[dt.date, list[GatePassLine]] = {}
+    for line in pass_lines:
+        passes_by_day.setdefault(line.date, []).append(line)
+
     days: list[DetailDay] = []
     day = start
     while day <= end:
@@ -171,6 +225,7 @@ def render_detail(session, employee: Employee, start: dt.date,
             leave_code=leave.sheet_code if leave else None,
             leave_type_label=leave.type_label if leave else None,
             leave_record_id=leave.record_id if leave else None,
+            gate_passes=passes_by_day.get(day, []),
         )
         if row is not None:
             detail_day.first_in = row.first_in
@@ -243,6 +298,7 @@ def render_detail(session, employee: Employee, start: dt.date,
         period_end=end,
         days=days,
         leave=leave_lines,
+        gate_passes=pass_lines,
         provisional_days=sum(1 for d in days
                              if d.provisional and d.late_minutes is not None),
         manual_days=sum(1 for d in days if d.manual_punch_count),
@@ -284,6 +340,11 @@ def to_text(detail: Detail, with_punches: bool = False) -> str:
         if day.leave_record_id and not day.leave_code:
             marks.append(f"leave {day.leave_type_label or ''}".strip()
                          + " — the record carries no sheet code")
+        for line in day.gate_passes:
+            marks.append(
+                f"gate pass {line.out_time.strftime('%H:%M')}–"
+                f"{line.in_time.strftime('%H:%M')} = {line.hours}h "
+                f"({line.category_label or line.category_code})")
         out.append(f"{str(day.date):<12}{day.weekday:<5}{first:<10}{last:<10}"
                    f"{late:>6}  {leave:<7}"
                    + (f"{day.punch_count}" if day.has_row else "-")
@@ -297,7 +358,12 @@ def to_text(detail: Detail, with_punches: bool = False) -> str:
                 else:
                     counted = "copy, not counted"
                 who = f"  {punch.who}" if punch.who else ""
-                out.append(f"            {punch.at}  {punch.source:<15}"
+                # To the second here too: a guard entry's time is the server's
+                # own stamp, and its microseconds are noise in a line a person
+                # reads against a punch card.
+                when = (punch.at.isoformat(sep=" ", timespec="seconds")
+                        if punch.at else "")
+                out.append(f"            {when}  {punch.source:<15}"
                            f"{counted:<18}{who}")
                 if punch.cancelled:
                     # Said in full, because "CANCELLED" alone leaves the reader
@@ -319,6 +385,25 @@ def to_text(detail: Detail, with_punches: bool = False) -> str:
             out.append(row + f"   {line.type_label or line.type_code or '-'}"
                              f"  [{line.sheet_code or 'no sheet code'}]")
 
+    if detail.gate_passes:
+        out.append("")
+        out.append("gate passes in this period, as HR typed them off the paper:")
+        total = sum(line.hours for line in detail.gate_passes)
+        for line in detail.gate_passes:
+            out.append(
+                f"  {line.record_id:>4}  {line.date}  "
+                f"{line.out_time.strftime('%H:%M')} → "
+                f"{line.in_time.strftime('%H:%M')}  {line.hours} hour(s)  "
+                f"{line.category_label or line.category_code}"
+                + (f"  {line.destination}" if line.destination else "")
+                + f"   typed by {line.entered_by}")
+        # **Listed and added up, and that is not the time-off summary.** §5's
+        # summary is a period total per employee across every pass, and it
+        # belongs to Milestone 3; this is the arithmetic a reader would do by
+        # hand on the lines already in front of them.
+        out.append(f"  {total} hour(s) on this employee's passes in this "
+                   "period. The time-off summary is Milestone 3 (SPEC §5)")
+
     out.append("")
     out.append("* entered by a person, not the device (SPEC §3)")
     if detail.provisional_days:
@@ -330,6 +415,23 @@ def to_text(detail: Detail, with_punches: bool = False) -> str:
 
 
 # ---- the browser ---------------------------------------------------------
+
+
+def _pass_json(line: GatePassLine) -> dict:
+    """One gate pass, as plain data. **The hours are the stored ones**, turned
+    into a string so a Decimal survives JSON without becoming a float."""
+    return {
+        "record_id": line.record_id,
+        "date": line.date.isoformat(),
+        "category_code": line.category_code,
+        "category_label": line.category_label,
+        "out_time": line.out_time.strftime("%H:%M"),
+        "in_time": line.in_time.strftime("%H:%M"),
+        "hours": str(line.hours),
+        "reason": line.reason,
+        "destination": line.destination,
+        "entered_by": line.entered_by,
+    }
 
 
 def to_json(detail: Detail) -> dict:
@@ -366,9 +468,15 @@ def to_json(detail: Detail) -> dict:
                 "leave_code": day.leave_code,
                 "leave_type_label": day.leave_type_label,
                 "leave_record_id": day.leave_record_id,
+                "gate_passes": [_pass_json(line) for line in day.gate_passes],
                 "punches": [
                     {
-                        "at": punch.at.isoformat(sep=" ") if punch.at else None,
+                        # Seconds. A punch is stamped to the microsecond and
+                        # nobody reads one — six decimal places in a headline
+                        # that names a person is noise standing where a fact
+                        # should be.
+                        "at": (punch.at.isoformat(sep=" ", timespec="seconds")
+                               if punch.at else None),
                         "source": punch.source,
                         "manual": punch.manual,
                         "who": punch.who,
@@ -384,6 +492,7 @@ def to_json(detail: Detail) -> dict:
             }
             for day in detail.days
         ],
+        "gate_passes": [_pass_json(line) for line in detail.gate_passes],
         "leave": [
             {
                 "record_id": line.record_id,

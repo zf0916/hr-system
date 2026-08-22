@@ -14,14 +14,22 @@ import { ask, monthOf } from '../api.js'
 // what scrolls underneath would otherwise show through — and a border drawn on
 // the cell rather than collapsed between cells, because a collapsed border
 // belongs to neither and scrolls away with the wrong one.
-// The three frozen columns, in pixels, because a sticky offset has to be the
+// The four frozen columns, in pixels, because a sticky offset has to be the
 // exact width of what is to its left. A class that is *nearly* the column's
 // width pins the column over its neighbour instead of beside it.
+//
+// **Section is one of them, and it is the file's third column.** The rows are
+// ordered by section — that is how HR reads the sheet — and the screen used to
+// show the order with nothing on it explaining the order. §7 says the screen
+// carries everything the file carries except how it prints, and a column is
+// not how it prints.
 const NUMBER_W = 72
 const NAME_W = 208
+const SECTION_W = 128
 const ROLE_W = 168
-const FROZEN_LEFT = [0, NUMBER_W, NUMBER_W + NAME_W]
-const FROZEN_WIDTH = NUMBER_W + NAME_W + ROLE_W
+const FROZEN_LEFT = [0, NUMBER_W, NUMBER_W + NAME_W,
+                     NUMBER_W + NAME_W + SECTION_W]
+const FROZEN_WIDTH = NUMBER_W + NAME_W + SECTION_W + ROLE_W
 
 const EDGE = 'border-b border-slate-200 '
 const FROZEN_HEAD =
@@ -154,7 +162,7 @@ export default function Sheet({ search, go }) {
 
       {/* The grid scrolls inside itself, in both directions. Reaching the
           horizontal scrollbar must not mean scrolling past every employee
-          first — and the three identifying columns and the two date rows stay
+          first — and the four identifying columns and the two date rows stay
           put while the rest moves, which is exactly what the file does with
           freeze panes and repeating print titles (SPEC §7). */}
       <div
@@ -169,6 +177,7 @@ export default function Sheet({ search, go }) {
           <colgroup>
             <col style={{ width: NUMBER_W }} />
             <col style={{ width: NAME_W }} />
+            <col style={{ width: SECTION_W }} />
             <col style={{ width: ROLE_W }} />
             {data.columns.map((column, index) => (
               <col key={column.date} style={{ width: dayWidths[index] }} />
@@ -176,10 +185,11 @@ export default function Sheet({ search, go }) {
           </colgroup>
           <thead>
             <tr>
-              {['No.', 'Name', 'Role'].map((heading, index) => (
+              {['No.', 'Name', 'Section', 'Role'].map((heading, index) => (
                 <th
                   key={heading}
                   data-frozen={index}
+                  data-identifying={index}
                   className={FROZEN_HEAD + ' px-2 text-left'}
                   style={{ left: FROZEN_LEFT[index] }}
                 >
@@ -238,8 +248,13 @@ export default function Sheet({ search, go }) {
                     title={row.name} style={{ left: FROZEN_LEFT[1] }}>
                   {row.name}
                 </td>
-                <td data-frozen="2" className={FROZEN_CELL + ' truncate text-slate-500'}
-                    title={row.role_code} style={{ left: FROZEN_LEFT[2] }}>
+                <td data-frozen="2" data-row-section={row.employee_number}
+                    className={FROZEN_CELL + ' truncate text-slate-600'}
+                    title={row.section_code} style={{ left: FROZEN_LEFT[2] }}>
+                  {row.section_code}
+                </td>
+                <td data-frozen="3" className={FROZEN_CELL + ' truncate text-slate-500'}
+                    title={row.role_code} style={{ left: FROZEN_LEFT[3] }}>
                   {row.role_code}
                 </td>
                 {data.columns.map((column) => (
@@ -254,6 +269,75 @@ export default function Sheet({ search, go }) {
           </tbody>
         </table>
       </div>
+
+      {/* **What every mark above was measured against.** A tick means
+          "inside these times"; a lateness figure is measured from this start
+          plus this grace; a punch belongs to this day because it fell inside
+          this window. Those are §9's A1, A2, A4, A30 and A31 — rows, all of
+          them provisional, and until now visible only in their consequences.
+          It is under the grid rather than on a screen of its own because it is
+          read against the grid, and it is on the filed file too (SPEC §7). */}
+      <section data-schedule-block className="mt-6">
+        <h2 className="font-semibold text-slate-900">
+          The schedule every mark above was measured against
+        </h2>
+        {data.schedules.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-500">
+            No group on this sheet has a schedule row in force in this period.
+          </p>
+        ) : (
+          <div className="mt-2 overflow-x-auto border border-slate-200 bg-white">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-300 text-left text-slate-500">
+                  {['Group', 'Shift', 'Break', 'Grace', 'Rest day',
+                    'A punch belongs to this day within', 'Row'].map((h) => (
+                    <th key={h} className="px-3 py-2 font-medium">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.schedules.map((line) => (
+                  <tr
+                    key={`${line.group_code}:${line.schedule_id}`}
+                    data-schedule={`${line.group_code}:${line.schedule_id}`}
+                    className="border-b border-slate-100 align-top"
+                  >
+                    <td className="px-3 py-1.5 font-mono">{line.group_code}</td>
+                    <td className="px-3 py-1.5 font-mono" data-shift>{line.shift}</td>
+                    <td className="px-3 py-1.5 font-mono" data-break>{line.break}</td>
+                    <td className="px-3 py-1.5 font-mono" data-grace>
+                      {line.grace_minutes} min
+                    </td>
+                    <td className="px-3 py-1.5">{line.rest_days}</td>
+                    <td className="px-3 py-1.5" data-window>
+                      {line.attendance_day_window}
+                    </td>
+                    <td className="px-3 py-1.5 text-slate-500">
+                      #{line.schedule_id}, from {line.effective_from}
+                      {line.effective_to ? ` to ${line.effective_to}` : ''} ·{' '}
+                      {line.days_here} day(s) here
+                      {line.provisional && (
+                        <span
+                          data-schedule-provisional={line.schedule_id}
+                          className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-900"
+                        >
+                          PROVISIONAL — never confirmed by HR
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="mt-2 text-sm text-slate-600">
+          Every value here is a row (SPEC §9 A1, A2, A4, A30, A31). Correcting
+          one is an update and a rebuild, not a code change — and the same
+          block is on the downloaded file.
+        </p>
+      </section>
 
       <section className="mt-6 grid gap-6 md:grid-cols-2">
         <div>

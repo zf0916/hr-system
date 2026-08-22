@@ -83,6 +83,72 @@ class Row:
     page: int
 
 
+# ISO weekday numbers, as `group_schedule.rest_weekdays` stores them. Named
+# here so the block under the grid reads "Sunday" rather than "7" — the point
+# of printing the schedule is that somebody who could correct it can read it.
+WEEKDAY_NAMES = {1: "Monday", 2: "Tuesday", 3: "Wednesday", 4: "Thursday",
+                 5: "Friday", 6: "Saturday", 7: "Sunday"}
+
+
+@dataclass
+class ScheduleLine:
+    """One schedule row this sheet was rendered against.
+
+    **Every figure on the grid rests on one of these, and until now none of
+    them was anywhere a reader could see.** A tick means "inside this row's
+    start and end"; a time means "outside it"; a late figure is measured from
+    this row's start plus this row's grace. Those are §9's A1, A2, A4, A30 and
+    A31 — all of them rows, all of them provisional, and all of them invisible
+    on a sheet that showed only their consequences.
+
+    `days_here` is how many days of this period were measured against this row,
+    so a group whose schedule changed mid-period shows both rows and how much
+    of the month each one covered.
+    """
+
+    group_code: str
+    schedule_id: int
+    effective_from: dt.date
+    effective_to: dt.date | None
+    start_time: dt.time
+    end_time: dt.time
+    end_next_day: bool
+    break_start: dt.time | None
+    break_end: dt.time | None
+    grace_minutes: int
+    rest_weekdays: tuple[int, ...]
+    window_before_minutes: int
+    window_after_minutes: int
+    provisional: bool
+    source: str | None
+    days_here: int
+
+    @property
+    def shift(self) -> str:
+        end = self.end_time.strftime("%H:%M")
+        return (f"{self.start_time.strftime('%H:%M')}–{end}"
+                + (" next day" if self.end_next_day else ""))
+
+    @property
+    def break_text(self) -> str:
+        if self.break_start is None or self.break_end is None:
+            return "none on the row"
+        return (f"{self.break_start.strftime('%H:%M')}–"
+                f"{self.break_end.strftime('%H:%M')}")
+
+    @property
+    def rest_text(self) -> str:
+        if not self.rest_weekdays:
+            return "none on the row"
+        return ", ".join(WEEKDAY_NAMES.get(day, str(day))
+                         for day in self.rest_weekdays)
+
+    @property
+    def window_text(self) -> str:
+        return (f"{self.window_before_minutes} min before the start, "
+                f"{self.window_after_minutes} min after the end")
+
+
 @dataclass
 class Sheet:
     title: str
@@ -97,6 +163,10 @@ class Sheet:
     rows: list[Row]
     cells: dict[tuple[int, dt.date], Cell]
     legend: list[tuple[str, str]]
+    # The schedule rows every tick and every time on this grid was measured
+    # against. Carried on the render, so the terminal, the browser and the file
+    # print the same block rather than each looking them up (SPEC §7).
+    schedules: list[ScheduleLine] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     # How many cells say something that rests on a schedule row HR has never
     # confirmed. Counted at render, so the screen, the file and the text output
@@ -156,6 +226,25 @@ def resolve_period(session, month: str | None = None, start=None,
     return as_date(start), as_date(end)
 
 
+def _manual(row: DailyAttendance | None) -> bool:
+    """Did a person enter any punch this day counted?
+
+    **The mark is on the day, not on the two times the cell happens to show.**
+    Keying it to `first_in_manual or last_out_manual` left a punch entered in
+    the middle of a shift invisible: four punches, two of them a guard's,
+    rendering as a bare tick. §3 says every manual punch is marked on the sheet
+    and §13 lists an unmarked one as a never, so the row's own count decides.
+
+    **Cancelled corrections are not in that count.** They are counted nowhere,
+    and marking a day for a punch that stopped counting would say the opposite
+    of what the cancellation meant (SPEC §3).
+    """
+    if row is None:
+        return False
+    return bool(row.first_in_manual or row.last_out_manual
+                or row.manual_punch_count)
+
+
 def _cell_for(row: DailyAttendance | None, employee_id: int, day: dt.date,
               marks: dict[str, str], leave=None) -> Cell:
     """One day for one employee, from its daily row and nothing else.
@@ -177,8 +266,19 @@ def _cell_for(row: DailyAttendance | None, employee_id: int, day: dt.date,
             leave_detail += f"; {row.punch_count} punch(es) on the same day"
 
         if leave.sheet_code:
+            # **The mark survives the code.** §3 says every manual punch is
+            # marked on the sheet and §13 lists an unmarked one as a never —
+            # neither carves out a day that also has leave on it. A49 decides
+            # which *text* the cell shows; it does not decide whether the day
+            # says a person entered a punch. Without this, a guard entry on a
+            # day HR later coded `AL` disappears from the sheet entirely.
+            leave_manual = _manual(row)
             return Cell(
-                employee_id, day, leave.sheet_code, LEAVE,
+                employee_id, day,
+                leave.sheet_code + (marks.get("sheet.mark_manual", "*")
+                                    if leave_manual else ""),
+                LEAVE,
+                manual=leave_manual,
                 leave_code=leave.sheet_code,
                 punch_count=row.punch_count if row is not None else 0,
                 provisional=row.schedule_provisional if row is not None else False,
@@ -219,7 +319,7 @@ def _cell_for(row: DailyAttendance | None, employee_id: int, day: dt.date,
                 and row.last_out < row.scheduled_end):
             outside.append(row.last_out.strftime(time_format))
 
-    manual = bool(row.first_in_manual or row.last_out_manual)
+    manual = _manual(row)
     mark = marks.get("sheet.mark_manual", "*") if manual else ""
 
     if outside:
@@ -281,6 +381,12 @@ def render(session, start: dt.date, end: dt.date,
 
     columns: list[Column] = []
     notes: list[str] = []
+    # Which schedule row each group's days were measured against, and how many
+    # days of this period each one covered. Collected here rather than looked
+    # up again afterwards, because this loop already asks the question for
+    # every group on every day — asking twice is how two answers start.
+    schedules_used: dict[tuple[str, int], int] = {}
+    schedule_rows: dict[int, GroupSchedule] = {}
     day = start
     while day <= end:
         holiday = effective_holiday(session, day)
@@ -288,6 +394,10 @@ def render(session, start: dt.date, end: dt.date,
         resting = []
         for group in groups:
             schedule = schedule_for(session, group, day)
+            if schedule is not None:
+                key = (group, schedule.id)
+                schedules_used[key] = schedules_used.get(key, 0) + 1
+                schedule_rows[schedule.id] = schedule
             if schedule is not None and is_rest_day(schedule, day):
                 resting.append(group)
 
@@ -317,6 +427,34 @@ def render(session, start: dt.date, end: dt.date,
             provisional_holiday=bool(holiday and holiday.provisional),
         ))
         day += dt.timedelta(days=1)
+
+    schedule_lines = [
+        ScheduleLine(
+            group_code=group,
+            schedule_id=schedule_id,
+            effective_from=schedule_rows[schedule_id].effective_from,
+            effective_to=schedule_rows[schedule_id].effective_to,
+            start_time=schedule_rows[schedule_id].start_time,
+            end_time=schedule_rows[schedule_id].end_time,
+            end_next_day=schedule_rows[schedule_id].end_next_day,
+            break_start=schedule_rows[schedule_id].break_start,
+            break_end=schedule_rows[schedule_id].break_end,
+            grace_minutes=schedule_rows[schedule_id].grace_minutes,
+            rest_weekdays=tuple(schedule_rows[schedule_id].rest_weekdays or ()),
+            window_before_minutes=(
+                schedule_rows[schedule_id].window_before_minutes),
+            window_after_minutes=schedule_rows[schedule_id].window_after_minutes,
+            provisional=bool(schedule_rows[schedule_id].provisional),
+            source=schedule_rows[schedule_id].source,
+            days_here=days_here,
+        )
+        for (group, schedule_id), days_here in sorted(schedules_used.items())
+    ]
+    for group in groups:
+        if not any(line.group_code == group for line in schedule_lines):
+            notes.append(
+                f"{group} has no schedule row in force anywhere in this "
+                "period, so nothing on its rows was measured against one")
 
     leave = leave_by_day(session, start, end)
     daily = {
@@ -382,6 +520,7 @@ def render(session, start: dt.date, end: dt.date,
         rows=sheet_rows,
         cells=cells,
         legend=legend_rows(session),
+        schedules=schedule_lines,
         notes=notes,
         provisional_cells=provisional_cells,
     )
@@ -405,6 +544,42 @@ def legend_rows(session) -> list[tuple[str, str]]:
         ("(shaded)", "rest day or a public holiday the factory closes for"),
     ]
     return legend
+
+
+def schedule_block(sheet: Sheet) -> list[str]:
+    """The schedule rows this sheet rests on, as lines a person reads.
+
+    **Built once and printed by all three outputs**, the same rule the cells
+    follow: the terminal, the browser and the file cannot come to describe the
+    schedule differently because none of them works it out.
+
+    This is where §9's assumptions stop being invisible. Every tick on the grid
+    above means "inside these times" and every figure of lateness is measured
+    from this start plus this grace — and HR has never seen either number.
+    """
+    lines = ["the schedule every mark above was measured against:"]
+    if not sheet.schedules:
+        lines.append("  none — no group on this sheet has a schedule row in "
+                     "force in this period")
+        return lines
+    for line in sheet.schedules:
+        lines.append(
+            f"  {line.group_code:<12} {line.shift:<20}"
+            f" break {line.break_text:<16}"
+            f" grace {line.grace_minutes} min")
+        lines.append(
+            f"  {'':<12} rest {line.rest_text}"
+            f"; a punch belongs to the day within {line.window_text}")
+        lines.append(
+            f"  {'':<12} schedule row {line.schedule_id}, in force from "
+            f"{line.effective_from}"
+            + (f" to {line.effective_to}" if line.effective_to else "")
+            + f", covering {line.days_here} day(s) of this period"
+            + ("  — PROVISIONAL, never confirmed by HR (SPEC §9 A1, A2, A4, "
+               "A30, A31)" if line.provisional else ""))
+    lines.append("  every one of these is a row. Correcting one is an UPDATE "
+                 "and a rebuild, not a code change")
+    return lines
 
 
 # ---- the screen ----------------------------------------------------------
@@ -460,6 +635,8 @@ def to_text(sheet: Sheet, width: int | None = None) -> str:
             line += f"{sheet.cell(row.employee_id, column.date).text:>{w}}"
         out.append(line)
 
+    out.append("")
+    out += schedule_block(sheet)
     out.append("")
     out.append("legend: " + "  ".join(f"{code} {label}"
                                       for code, label in sheet.legend))
@@ -536,6 +713,29 @@ def to_json(sheet: Sheet) -> dict:
         },
         "legend": [{"code": code, "label": label}
                    for code, label in sheet.legend],
+        "schedules": [
+            {
+                "group_code": line.group_code,
+                "schedule_id": line.schedule_id,
+                "effective_from": line.effective_from.isoformat(),
+                "effective_to": (line.effective_to.isoformat()
+                                 if line.effective_to else None),
+                "shift": line.shift,
+                "start_time": line.start_time.strftime("%H:%M"),
+                "end_time": line.end_time.strftime("%H:%M"),
+                "end_next_day": line.end_next_day,
+                "break": line.break_text,
+                "grace_minutes": line.grace_minutes,
+                "rest_days": line.rest_text,
+                "attendance_day_window": line.window_text,
+                "window_before_minutes": line.window_before_minutes,
+                "window_after_minutes": line.window_after_minutes,
+                "provisional": line.provisional,
+                "source": line.source,
+                "days_here": line.days_here,
+            }
+            for line in sheet.schedules
+        ],
         "notes": list(sheet.notes),
     }
 
@@ -688,6 +888,20 @@ def _build_workbook(sheet: Sheet):
     for index, note in enumerate(sheet.notes, start=len(sheet.legend) + 2):
         worksheet.cell(note_row + index, 1, note)
 
+    # **The schedule block is on the filed record too.** §7 lets the screen and
+    # the file differ only in how the file prints, and the rows every mark on
+    # the grid was measured against are not printing — they are what the marks
+    # mean. A filed sheet that says a day was late without saying what it was
+    # late against is a claim nobody can check later.
+    schedule_row = page["schedule_row"]
+    provisional_font = Font(italic=True, color="C00000")
+    for index, line in enumerate(schedule_block(sheet)):
+        cell = worksheet.cell(schedule_row + index, 1, line.strip())
+        if index == 0:
+            cell.font = Font(bold=True)
+        elif "PROVISIONAL" in line:
+            cell.font = provisional_font
+
     worksheet.column_dimensions["A"].width = 8
     worksheet.column_dimensions["B"].width = 26
     worksheet.column_dimensions["C"].width = 14
@@ -696,7 +910,7 @@ def _build_workbook(sheet: Sheet):
     last_column = 4 + len(sheet.columns)
     worksheet.print_area = (
         f"A1:{worksheet.cell(1, last_column).column_letter}"
-        f"{note_row + len(sheet.legend) + len(sheet.notes) + 2}"
+        f"{page['last_row']}"
     )
     return workbook
 
@@ -725,6 +939,12 @@ def page_layout(sheet: Sheet) -> dict:
     # footnote to whichever employees happen to be above them.
     if sheet.rows:
         breaks.append(legend_row - 1)
+    # The schedule block goes under the notes, on that same last page: it is
+    # the same kind of thing — what the marks above mean — and a page break
+    # between the notes and the schedule would separate two halves of one
+    # explanation.
+    schedule_row = legend_row + len(sheet.legend) + len(sheet.notes) + 3
+    last_row = schedule_row + len(schedule_block(sheet)) + 1
     return {
         "orientation": "landscape",
         "fit_to_width": 1,
@@ -732,6 +952,8 @@ def page_layout(sheet: Sheet) -> dict:
         "print_title_rows": f"{layout['header_row']}:{layout['weekday_row']}",
         "row_breaks": sorted(set(breaks)),
         "legend_row": legend_row,
+        "schedule_row": schedule_row,
+        "last_row": last_row,
         "rows_per_page": sheet.rows_per_page,
     }
 

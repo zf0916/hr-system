@@ -7,6 +7,9 @@
 //
 //   * a leave record's day count is what the form says, and where that differs
 //     from the range it covers, both numbers show (SPEC §6);
+//   * a gate pass HR typed off the paper shows on its day and again in a list
+//     of its own, with the hours the database generated from the two times —
+//     read, never worked out here (SPEC §5);
 //   * a lateness figure measured against an unconfirmed schedule is marked,
 //     because the punch time is real and the lateness is arithmetic on a guess.
 import { useEffect, useState } from 'react'
@@ -143,6 +146,17 @@ export default function Detail({ number, search, go }) {
                     {day.holiday_closes ? '' : ' (worked)'}
                   </span>
                 )}
+                {day.gate_passes.map((line) => (
+                  <span
+                    key={line.record_id}
+                    data-gate-pass={line.record_id}
+                    className="mr-2 rounded bg-sky-50 px-1.5 py-0.5 text-xs text-sky-900"
+                  >
+                    gate pass {line.out_time}–{line.in_time} ={' '}
+                    <strong>{line.hours}</strong>h ·{' '}
+                    {line.category_label || line.category_code}
+                  </span>
+                ))}
                 {day.punches
                   .filter((punch) => punch.counted)
                   .map((punch, index) => (
@@ -199,6 +213,47 @@ export default function Detail({ number, search, go }) {
             </ul>
           )}
         </div>
+        <div>
+          <h2 className="font-semibold text-slate-900">
+            Gate passes in this period
+          </h2>
+          {data.gate_passes.length === 0 ? (
+            <p className="mt-2 text-sm text-slate-500">none recorded</p>
+          ) : (
+            <ul className="mt-2 space-y-3 text-sm">
+              {data.gate_passes.map((line) => (
+                <li
+                  key={line.record_id}
+                  data-gate-pass-record={line.record_id}
+                  className="border-b border-slate-100 pb-3"
+                >
+                  <div>
+                    <span className="font-mono">{line.date}</span> ·{' '}
+                    <span className="font-mono">{line.out_time}</span> to{' '}
+                    <span className="font-mono">{line.in_time}</span> ={' '}
+                    <strong data-pass-hours>{line.hours}</strong> hours ·{' '}
+                    {line.category_label || line.category_code}
+                  </div>
+                  {(line.destination || line.reason) && (
+                    <div className="mt-1 text-slate-600">
+                      {[line.destination, line.reason].filter(Boolean).join(' · ')}
+                    </div>
+                  )}
+                  <div className="mt-1 text-xs text-slate-400">
+                    typed by {line.entered_by}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-2 text-xs text-slate-500">
+            The hours are not written on the gate pass and nothing here works
+            them out — the database generates them from the two times (SPEC §5).
+            Totalling them per employee per period is the time-off summary,
+            which is Milestone 3.
+          </p>
+        </div>
+
         <div className="text-sm text-slate-600">
           <h2 className="font-semibold text-slate-900">Reading this</h2>
           <p className="mt-2">

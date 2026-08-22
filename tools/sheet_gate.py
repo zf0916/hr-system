@@ -31,6 +31,7 @@ from app.attendance import build_days
 from app.corrections import record_hr_retroactive
 from app.db import Session
 from app.models import (
+    DailyAttendance,
     Employee,
     EmployeeAssignment,
     EmployeeGroup,
@@ -193,6 +194,17 @@ def main() -> int:
             asserted_time=dt.datetime.combine(manual_day, dt.time(8, 0)),
             reason="device down", made_by="HR: Gate")
         punch(session, DAY_PIN, dt.datetime.combine(manual_day, dt.time(17, 32)))
+        # **A manual punch in the middle of the shift, on the 11th** — the
+        # device took the arrival and the departure, and a person entered one
+        # between them. It is neither the first in nor the last out, which is
+        # exactly the punch the sheet used to render as a bare tick.
+        middle_day = dt.date(2026, 3, 11)
+        punch(session, DAY_PIN, dt.datetime.combine(middle_day, dt.time(7, 55)))
+        record_hr_retroactive(
+            session, day,
+            asserted_time=dt.datetime.combine(middle_day, dt.time(12, 0)),
+            reason="came back through the side door", made_by="HR: Gate")
+        punch(session, DAY_PIN, dt.datetime.combine(middle_day, dt.time(17, 35)))
         build_days(session, MONTH_START, MONTH_END, [day.id])
 
         sheet = render(session, MONTH_START, MONTH_END)
@@ -212,6 +224,29 @@ def main() -> int:
                    and cells[manual_day].text.endswith("*"),
                    "a manual punch is marked in the cell",
                    f"got {cells[manual_day].text!r}")
+        # The row itself has to say the punch is neither end of the day, or the
+        # check below is passing for the wrong reason.
+        middle_row = session.execute(
+            select(DailyAttendance).where(
+                DailyAttendance.employee_id == day.id,
+                DailyAttendance.attendance_day == middle_day)
+        ).scalar_one()
+        gate.check(not middle_row.first_in_manual
+                   and not middle_row.last_out_manual
+                   and middle_row.manual_punch_count == 1
+                   and middle_row.punch_count == 3,
+                   "the middle day's punch is neither its first in nor its "
+                   "last out",
+                   f"first_in_manual={middle_row.first_in_manual} "
+                   f"last_out_manual={middle_row.last_out_manual} "
+                   f"manual={middle_row.manual_punch_count} "
+                   f"punches={middle_row.punch_count}")
+        gate.check(cells[middle_day].manual
+                   and cells[middle_day].text == "✓*",
+                   "a manual punch in the middle of the shift is marked too — "
+                   "an unmarked one is a never (SPEC §3, §13)",
+                   f"got {cells[middle_day].text!r} "
+                   f"manual={cells[middle_day].manual}")
         gate.check(cells[dt.date(2026, 3, 10)].kind == EMPTY
                    and cells[dt.date(2026, 3, 10)].text == "",
                    "a day with no punch is blank, not an absence code",
@@ -227,10 +262,47 @@ def main() -> int:
         gate.check(contents["cells"][(DAY_NUMBER, manual_day.day)].endswith("*"),
                    "the file carries the manual mark",
                    f"got {contents['cells'].get((DAY_NUMBER, manual_day.day))!r}")
+        gate.check(contents["cells"][(DAY_NUMBER, middle_day.day)] == "✓*",
+                   "and it carries the middle day's mark, so the filed record "
+                   "says a person entered a punch there",
+                   f"got {contents['cells'].get((DAY_NUMBER, middle_day.day))!r}")
         gate.check(str(contents["note"]).strip() == ""
                    and "not read" in (contents["note_marker"] or ""),
                    "the unread note is empty in the file and marked as unread",
                    f"note {contents['note']!r} marker {contents['note_marker']!r}")
+
+        # **The schedule every mark rests on, on the filed record.** A sheet
+        # that says a day was late without saying what it was late against is
+        # a claim nobody can check afterwards — and these are the numbers HR
+        # has never seen (SPEC §9 A1, A2, A4, A30, A31).
+        block = "\n".join(contents["schedule_block"])
+        gate.check(bool(contents["schedule_block"]),
+                   "the file carries the schedule block")
+        gate.check(DAY_GROUP in block and NIGHT_GROUP in block,
+                   "naming every group on the sheet",
+                   f"it says {block[:200]!r}")
+        gate.check("08:00–17:30" in block and "19:30–04:30 next day" in block,
+                   "with each group's start and end, and the crossed midnight "
+                   "said rather than inferred (SPEC §9 A1, A2)",
+                   f"it says {block[:300]!r}")
+        gate.check("grace 0 min" in block,
+                   "the grace period (A4)", f"it says {block[:300]!r}")
+        gate.check("240 min before the start" in block
+                   and "240 min after the end" in block,
+                   "the attendance-day window (A30)",
+                   f"it says {block[:400]!r}")
+        gate.check("rest Sunday" in block,
+                   "and the rest day, from the schedule row rather than the "
+                   "calendar (SPEC §4)", f"it says {block[:400]!r}")
+        gate.check(block.count("PROVISIONAL") >= 2,
+                   "and every provisional row says so where it stands",
+                   f"{block.count('PROVISIONAL')} of them say it")
+
+        text_block = to_text(sheet)
+        gate.check(all(line.strip() in text_block
+                       for line in contents["schedule_block"]),
+                   "and the terminal prints the same block, line for line — "
+                   "one block, three outputs (SPEC §7)")
 
         # The deliberate mistakes, one at a time, against the same render.
         print("       and now the mistakes:")
@@ -263,6 +335,23 @@ def main() -> int:
                    != sheet.cell(day.id, manual_day).text,
                    "a manual punch rendered like a device punch is a different "
                    "sheet — the mark is the only thing distinguishing it")
+
+        # The same for the middle day, and here the mark is the *only* thing
+        # there is: the cell is a tick either way, so an unmarked one is
+        # indistinguishable from a day nobody touched.
+        middle_stripped = render(session, MONTH_START, MONTH_END)
+        middle_cell = middle_stripped.cells[(day.id, middle_day)]
+        middle_cell.text = middle_cell.text.rstrip("*")
+        middle_cell.manual = False
+        gate.check(middle_cell.text == sheet.cell(day.id, inside).text,
+                   "unmarked, the middle day is character-for-character an "
+                   "ordinary device day — which is what makes the mark the "
+                   "whole check",
+                   f"{middle_cell.text!r} vs {sheet.cell(day.id, inside).text!r}")
+        _, middle_gone = in_temp_file(middle_stripped, compare_against=sheet)
+        gate.check(bool(middle_gone),
+                   "and a file that lost it is caught",
+                   "the readback reported them as agreeing")
 
         swapped = render(session, MONTH_START, MONTH_END)
         swapped.cells[(day.id, inside)].text = "07:58"

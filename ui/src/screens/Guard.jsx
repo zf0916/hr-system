@@ -231,7 +231,7 @@ export default function Guard({ search, go }) {
             value={typed}
             onChange={(event) => setTyped(event.target.value)}
             className="mt-1 w-full rounded-lg border border-slate-300 px-4 py-3 text-2xl"
-            placeholder="0090"
+            placeholder="number or name"
           />
           <div className="mt-3 max-h-80 space-y-1 overflow-y-auto">
             {matches.slice(0, 20).map((person) => (

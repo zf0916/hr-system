@@ -41,6 +41,7 @@ import datetime as dt
 import inspect
 import json
 import pathlib
+import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -655,6 +656,28 @@ def run(gate, args, scratch, at_the_start) -> int:
         gate.check("Only corrections appear here" in (looked["onlyManual"] or ""),
                    "and the list says a device punch is not among them",
                    f"it says {looked['onlyManual']!r}")
+        # **A guard entry is the one that carries microseconds**, because its
+        # time is the server's own stamp rather than a typed one — and it is
+        # the entry this screen most often lists. An HR retroactive punch is
+        # typed to the minute and would pass this check whatever the format.
+        scratch.run("hr", "corrections", "guard", "--employee", EMPLOYEE,
+                    "--reason", "biometric_failed", "--by", "Guard: gate")
+        stamped = scratch.run("hr", "corrections", "list", "--employee",
+                              EMPLOYEE, "--from", "2020-01-01",
+                              "--to", "2030-12-31")
+        gate.check("guard" in stamped,
+                   "a guard entry — server-stamped, so its time is not a typed "
+                   "one — is on the record to look at",
+                   stamped[-200:])
+        shown = json.loads(ask(*scratch.published, "GET",
+                               f"/api/corrections/list?employee={EMPLOYEE}"
+                               "&from=2020-01-01&to=2030-12-31")[1])
+        offending = [line["at"] for line in shown["corrections"]
+                     if line["at"] and re.search(r":\d{2}\.\d", line["at"])]
+        gate.check(not offending,
+                   "and every time the screen lists is to the second, not the "
+                   "microsecond",
+                   f"these carry a fraction: {offending}")
 
         # **Where the dialog actually is.** It opened in the top-left corner
         # once, because Tailwind's preflight sets `margin: 0` on everything and
@@ -691,6 +714,14 @@ def run(gate, args, scratch, at_the_start) -> int:
         gate.check(EMPLOYEE in (dialog["dialogText"] or "")
                    and "08:05" in (dialog["dialogText"] or ""),
                    "which names the punch it is about to void",
+                   f"it says {dialog['dialogText']!r}")
+        # **To the second, in a headline a person is meant to read.** Six
+        # decimal places of a second is noise standing where the fact is, and
+        # the fact is the whole reason the dialog repeats it rather than asking
+        # "are you sure?".
+        gate.check(not re.search(r"\d{2}:\d{2}:\d{2}\.\d",
+                                 dialog["dialogText"] or ""),
+                   "and states the time to the second, not the microsecond",
                    f"it says {dialog['dialogText']!r}")
         gate.check(dialog["focused"] == "keep",
                    "and Keep it holds the focus — the default answer is no",

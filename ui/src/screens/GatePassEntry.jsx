@@ -247,7 +247,7 @@ export default function GatePassEntry({ go }) {
             autoComplete="off"
             value={number}
             onChange={(event) => setNumber(event.target.value)}
-            placeholder="0090"
+            placeholder="four digits"
             className={box + ' font-mono'}
           />
         </Field>

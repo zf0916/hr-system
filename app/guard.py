@@ -23,12 +23,21 @@ one, and the whole reason this path exists is that it cannot be (SPEC §3, §13)
 confirmed entry is on the record; HR corrects mistakes. What should replace a
 wrong one is parked, and it belongs to piece 6 — inventing an answer here would
 settle it by accident.
+
+**The entry reaches the sheet before the guard has put the phone down.** The
+daily rows are built from punches, corrections and the schedule, so a
+correction that does not rebuild its day is a correction the figures have not
+heard of: the row went on saying three punches while four existed, and the day
+detail listed all four under a count of three. `hr_corrections` has rebuilt the
+day it touched since piece 6; this is the same reflex on the other correction
+path, and the two paths behaving differently was the whole defect.
 """
 
 from __future__ import annotations
 
 from sqlalchemy import select
 
+from app.attendance import build_days
 from app.corrections import GUARD, employee_by_number, record_guard_entry
 from app.models import CorrectionReason, EmployeeAssignment, ScreenUser
 
@@ -128,7 +137,8 @@ def record(session, *, guard_code: str, employee_number: str,
     **It does not commit.** Committing here would make the entry unrollbackable
     by its own caller, which is how a gate that says it rolls back leaves a
     punch behind on every run. The caller commits — the route does, the CLI
-    does, and a gate does not.
+    does, and a gate does not. `build_days` flushes and does not commit either,
+    so the rebuild is inside whatever transaction the caller is holding.
     """
     guard = _guard(session, guard_code)
     employee = employee_by_number(session, employee_number)
@@ -137,6 +147,11 @@ def record(session, *, guard_code: str, employee_number: str,
         session, employee, reason_code=reason_code, made_by=guard.name,
         note="entered on the guard screen",
     )
+    # The day is rebuilt so the figures include the punch just recorded. One
+    # employee, one day — the guard is standing at the door, not waiting on a
+    # month.
+    build_days(session, punch.attendance_day, punch.attendance_day,
+               employee_ids=[employee.id])
 
     reason = session.get(CorrectionReason, punch.reason_code)
     return {

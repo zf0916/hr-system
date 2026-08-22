@@ -93,6 +93,8 @@ A missed, failed or wrong punch is corrected by **adding a row to a separate adj
 
 **A correction lands on an attendance day the same way a punch does** — through the schedule in force, so a night-shift correction after midnight belongs to the shift's day, not the clock's. It is derived, and rebuilt when a schedule is corrected.
 
+**Recording one rebuilds that day, on both paths.** The daily row is built from punches, corrections and the schedule, so a correction that does not rebuild its day is a correction the figures have not heard of — the row goes on saying three punches while four exist, and the day's detail lists all four under a count of three. The guard's entry and HR's retroactive entry both rebuild the one employee-day they touch, before the screen answers.
+
 **A correction is cancelled by a row, never edited and never deleted.** A wrong correction is not taken back by changing it or removing it: a cancellation is one more row in the adjustment layer, carrying who cancelled it and why, and the original stays exactly as it was written — same time, same reason, same person, same stamp. **The database enforces both halves**: an `UPDATE` that changes anything a person recorded on a manual punch is refused, and so is a `DELETE`. The two derived columns — which attendance day the punch belongs to, and which schedule that came from — stay rebuildable, because they are worked out rather than recorded.
 
 **Cancelling one changes what the figures count and nothing else.** The daily row is rebuilt without it: it is not the first in, not the last out, not in the count. **The row records how many it left out**, and the per-day detail still shows the punch, marked cancelled and saying who cancelled it and why — a punch that disappears from view is indistinguishable from one that never happened, which is the hole this section exists to close.
@@ -104,6 +106,8 @@ A missed, failed or wrong punch is corrected by **adding a row to a separate adj
 **A correction cannot be deleted, and that binds the employee list too.** Reloading the employee list wholesale is refused while any manual punch exists, the same way it is refused while a leave record or gate pass does (§5, §6) — and for a stronger reason: those are forms that could in principle be typed again, and a correction is an act somebody performed.
 
 **Every manual punch is marked on the generated sheet and counted per employee per period.** An unmarked manual punch is indistinguishable from a biometric one and recreates the hole the device exists to close. **A rising count for one employee means a bad enrollment or a process being worked around** — both need acting on.
+
+**The mark is on the day, not on the two times the cell happens to show.** A cell shows at most a first in and a last out, and a punch somebody entered in the middle of a shift is neither — so a mark keyed to those two columns leaves it invisible, and a day carrying four punches, two of them a guard's, renders as an ordinary tick. The day's own count of manual punches is what decides. **A cancelled correction is not in that count**, because it is counted nowhere; and **a day that also carries leave is marked too** — the leave code decides what the cell says, not whether the day says a person entered a punch.
 
 **No punch and an absence are not the same thing** and are never collapsed into one status. No punch is a fact; absence is an HR judgement.
 
@@ -190,7 +194,8 @@ The gate pass carries, as the form has it:
 - **Hours are not written on the gate pass.** Out time and in time are, and the hours are computed from the pair. This is the reverse of leave, where the number of days is written on the form and is stored as given, never recomputed (§6).
 - **The out and in times are the guard's on paper and HR's in the system.** The guard fills them in at the gate on the paper form; HR types both when the form is entered. **This is not the guard entry path in §3** — that path corrects a failed biometric punch, is server-stamped, and has no field for a typed time. Two different acts: a gate pass time is HR transcribing an authorised absence off paper, a guard entry is a punch standing in for one the device did not take. **The entry screen says this beside the two time boxes**, because the two acts look alike from a distance and only one of them has somewhere to type a time.
 - **The entry screen's fields are in the order the paper prints them** — name / no. pekerja, emp no., date, out time, in time, category, reason, destination. There is no department among them and no hours: the hours are shown once the pass is saved, read back from what the database generated.
-- **The summary totals gate pass hours per employee**, and nothing else feeds it.
+- **A pass is readable once it is typed.** It shows on the employee's per-day detail — on its own date with its two times and its hours, and again in a list for the period (§7). A form that could be entered and then found nowhere is a form HR has to keep on paper anyway.
+- **The summary totals gate pass hours per employee**, and nothing else feeds it. Listing the passes in a period and adding up the hours in front of a reader is not that summary: the summary is a period figure per employee that Accounts acts on, and it is Milestone 3.
 - Same 30-minute threshold, deducted from the next due salary.
 
 ### The individual time-off record
@@ -341,13 +346,15 @@ The Daily Workers Attendance sheet, in HR's existing layout.
 
 **Because the sheet is generated it is always current, and the monthly fill-in disappears.** Today HR marks leave onto the punch card a day or two after each form arrives, and then transcribes a month of cards and forms into the sheet in one sitting (§1). **That sitting is transcription cost, not a requirement.** Entry timing does not change — the forms still arrive when they arrive and are still entered when they are entered (§6) — but nothing has to be copied anywhere afterwards, and the sheet is readable on any day of the month rather than after it.
 
+**Under the grid, the sheet prints the schedule rows it was measured against** — per group: the start and end, whether the shift ends the next day, the break, the grace period, the rest day, and how far either side of the shift a punch still belongs to that day. **Every tick and every out-of-schedule time on the grid above is a claim about one of those rows, and every one of them is a guess until HR confirms it** (§9 A1, A2, A4, A30, A31). A row that is still provisional says so where it stands. The block is on the screen and on the filed file alike: it is what the marks mean, not how the file prints.
+
 - **Generated output. Regenerated on demand. Never annotated by hand or edited in place.** A sheet HR writes on cannot be regenerated without losing what they wrote, and leaves that data invisible to everything downstream.
 - Everything on it comes from stored data: punches, corrections, leave, schedule, calendar.
 - A cell holds **a tick when the punch is on schedule, the actual punch time when it is outside schedule**, or a leave code. **The legend prints the codes from their rows**, so a code HR adds to the legend appears on the sheet without anything being edited.
 - Rest days and public holidays shade as whole columns.
 - Manual punches are marked.
 
-**Per-day punch detail is available for any employee and day. This is what replaces reading the punch card, and it is Accounts who needs it most.** One employee, one period, every day of it, in one view: punch times, leave codes, and manual punches marked. **Re-pushed copies of a punch are counted and stated rather than listed one by one** — a day that arrived two hundred times would otherwise bury the month around it — and the full list stays available on demand. **Accounts prioritises the card over the attendance sheet today** (§1), because the card is the primary record and shows the detail; this view is what that preference transfers to.
+**Per-day punch detail is available for any employee and day. This is what replaces reading the punch card, and it is Accounts who needs it most.** One employee, one period, every day of it, in one view: punch times, leave codes, gate passes, and manual punches marked. **Re-pushed copies of a punch are counted and stated rather than listed one by one** — a day that arrived two hundred times would otherwise bury the month around it — and the full list stays available on demand. **Accounts prioritises the card over the attendance sheet today** (§1), because the card is the primary record and shows the detail; this view is what that preference transfers to.
 
 ---
 
@@ -630,7 +637,7 @@ So **an outage is not data loss**: the device holds the records and re-pushes th
 |Deleting a serial from the allowlist to stop it alerting|The raw layer keeps its requests forever; the list must say why it stopped being watched. Stand it down instead|
 |Collapsing "no punch" and "absent"|One is a fact, the other a judgement|
 |A guard-typed punch time|Server-stamped only|
-|An unmarked manual punch|It must be visibly countable|
+|An unmarked manual punch|It must be visibly countable. **The mark follows the day's count of them**, not the first-in and last-out columns — a punch entered mid-shift is neither, and a leave code on the same day does not remove it (§3)|
 |A fallback password left in place after re-enrollment|That is the permanent shared secret|
 |Logging or retaining a password payload|Purge on completion|
 |Hard-coding a schedule, grace period, threshold, period boundary, leave code or holiday|These are rows|

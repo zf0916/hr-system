@@ -60,6 +60,29 @@ DEPARTMENT_WORDS = ("department", "dept", "section")
 
 EMPLOYEE = "0090"
 
+# What the day detail says once the button on the confirmation is pressed.
+# Read after the click rather than by navigating: the button's own destination
+# is the thing being checked.
+SEE_IN_DETAIL = """
+new Promise((done) => {
+  const look = (left) => {
+    const rows = document.querySelectorAll('[data-gate-pass-record]');
+    if (!rows.length && left) return setTimeout(() => look(left - 1), 200);
+    done(JSON.stringify({
+      url: location.pathname + location.search,
+      heading: document.querySelector('h1')?.innerText.replace(/\\s+/g, ' '),
+      headings: [...document.querySelectorAll('h2')].map((h) => h.innerText),
+      records: [...rows].map((r) => r.innerText.replace(/\\s+/g, ' ')),
+      hours: [...document.querySelectorAll('[data-pass-hours]')]
+               .map((h) => h.innerText),
+      onTheDay: [...document.querySelectorAll('[data-gate-pass]')]
+                  .map((m) => m.innerText.replace(/\\s+/g, ' ')),
+    }));
+  };
+  look(40);
+})
+"""
+
 # Filling the form in a real browser and reading back what the page holds.
 # React ignores a value assigned straight onto an input, so the native setter
 # is called and an input event dispatched — the same event a keystroke makes.
@@ -418,6 +441,15 @@ def run(gate, args, scratch, at_the_start: int) -> int:
             steps = json.loads(browser.evaluate_raw(
                 FILL.replace("__EMPLOYEE__", EMPLOYEE)))
 
+            # **Press the button the page offers.** The confirmation says
+            # "See 0090's 2026-08 in detail", and until now the pass was not
+            # on that page — not there, not on the sheet, not on any list.
+            # A screen that sends a reader somewhere the thing is not is worse
+            # than a screen with no button.
+            browser.evaluate_raw(
+                "document.querySelector('[data-see-summary]').click()")
+            landed = json.loads(browser.evaluate_raw(SEE_IN_DETAIL))
+
         drawn = steps["after_typist"]
         gate.check(drawn["fields"] == expected,
                    f"the form's fields are in §5's order: {expected}",
@@ -478,6 +510,30 @@ def run(gate, args, scratch, at_the_start: int) -> int:
         gate.check("looked up" in (saved["saved"] or ""),
                    "and the section, still marked as looked up",
                    f"it says {(saved['saved'] or '')[:200]!r}")
+
+        # **Where the button goes, and what is on it when it gets there.**
+        gate.check(landed["url"] == f"/employee/{EMPLOYEE}?month=2026-08",
+                   "the confirmation's button opens that employee's month",
+                   f"it landed on {landed['url']!r}")
+        gate.check("Gate passes in this period" in landed["headings"],
+                   "which has a section for gate passes",
+                   f"its headings are {landed['headings']}")
+        gate.check(len(landed["records"]) == 1,
+                   "and the pass that was just typed is on it",
+                   f"it lists {landed['records']}")
+        gate.check(landed["hours"] == ["2.50"],
+                   "showing 2.50 hours — the stored column, not a sum this "
+                   "screen worked out (SPEC §5)",
+                   f"it shows {landed['hours']}")
+        gate.check(any("Klinik Melaka" in line for line in landed["records"]),
+                   "with the destination that was typed",
+                   f"it lists {landed['records']}")
+        gate.check(len(landed["onTheDay"]) == 1
+                   and "14:00" in landed["onTheDay"][0]
+                   and "16:30" in landed["onTheDay"][0],
+                   "and the 19th's own row carries it, so a reader running "
+                   "down the days meets it where it happened",
+                   f"the day rows carry {landed['onTheDay']}")
 
         listed = scratch.run("hr", "gatepass", "list", "--from", "2026-08-01",
                              "--to", "2026-08-31")

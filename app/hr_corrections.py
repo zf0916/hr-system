@@ -105,10 +105,19 @@ def screen(session) -> dict:
 
 
 def _line(record) -> dict:
+    """One correction, as the screen lists it.
+
+    **To the second.** A punch is stamped to the microsecond and nobody reads
+    one: `Cancel the correction of 2026-08-21 15:21:26.174929 for 0090?` puts
+    six decimal places in a headline that names a person, where the whole point
+    is that a reader checks the fact before answering. `recorded_at` beside it
+    has always been to the second; this is the same rule on the other column.
+    """
     return {
         "punch_id": record.punch_id,
         "attendance_day": record.attendance_day.isoformat(),
-        "at": record.at.isoformat(sep=" ") if record.at else None,
+        "at": (record.at.isoformat(sep=" ", timespec="seconds")
+               if record.at else None),
         "source": record.source,
         "why": record.why,
         "who": record.who,
@@ -172,7 +181,7 @@ def record(session, *, entered_by: str, employee_number: str, at: str,
     return {
         "punch_id": punch.id,
         "employee_number": employee.employee_number,
-        "at": punch.asserted_time.isoformat(sep=" "),
+        "at": punch.asserted_time.isoformat(sep=" ", timespec="seconds"),
         "attendance_day": punch.attendance_day.isoformat(),
         "reason": punch.reason,
         "made_by": punch.made_by,

@@ -149,9 +149,20 @@ def main() -> int:
     from sqlalchemy import func, select, text
 
     from app import guard as guard_module
-    from app.corrections import GUARD, employee_by_number, record_guard_entry
+    from app.corrections import (
+        GUARD,
+        employee_by_number,
+        punches_for,
+        record_guard_entry,
+    )
     from app.db import Session
-    from app.models import CorrectionReason, ManualPunch, ScreenUser
+    from app.models import (
+        CorrectionReason,
+        DailyAttendance,
+        ManualPunch,
+        ScreenUser,
+    )
+    from app.sheet import render
 
     gate = Gate()
     host, port = args.host, args.hr_port
@@ -298,6 +309,14 @@ def main() -> int:
     print("\n-- the entry it does make, in a transaction that is rolled back")
     with Session() as session:
         employee = employee_by_number(session, args.employee)
+
+        def daily(day):
+            return session.execute(
+                select(DailyAttendance).where(
+                    DailyAttendance.employee_id == employee.id,
+                    DailyAttendance.attendance_day == day)
+            ).scalars().first()
+
         result = guard_module.record(session, guard_code="guard-1",
                                      employee_number=args.employee,
                                      reason_code="biometric_failed")
@@ -318,6 +337,35 @@ def main() -> int:
                    "and it answers with the name that was shown back")
         gate.check("cannot be undone" in result["final"],
                    "and says the entry cannot be undone")
+
+        # **The figures have heard of it before the guard puts the phone
+        # down.** A correction that does not rebuild its day leaves the daily
+        # row saying one thing and the punches saying another — the row went on
+        # counting three while four existed, and the day detail listed all four
+        # under a count of three. `hr_corrections` rebuilds; so does this now.
+        rebuilt = daily(punch.attendance_day)
+        gate.check(rebuilt is not None,
+                   "the day has a daily row after the entry",
+                   f"no row for {punch.attendance_day}")
+        gate.check(rebuilt is not None and rebuilt.manual_punch_count >= 1,
+                   "and the row counts the punch the guard just made",
+                   f"manual_punch_count is "
+                   f"{rebuilt.manual_punch_count if rebuilt else None}")
+        counted = [p for p in punches_for(session, employee.id,
+                                          punch.attendance_day)
+                   if not p.cancelled]
+        gate.check(rebuilt is not None and rebuilt.punch_count == len(counted),
+                   "and its punch count is what the punches actually are — a "
+                   "row that disagrees with them is a row nobody can read",
+                   f"row says {rebuilt.punch_count if rebuilt else None}, "
+                   f"there are {len(counted)}")
+
+        sheet = render(session, punch.attendance_day, punch.attendance_day)
+        cell = sheet.cell(employee.id, punch.attendance_day)
+        gate.check(cell.manual and cell.text.endswith("*"),
+                   "and the sheet marks the day, without anything else being "
+                   "run (SPEC §3, §13)",
+                   f"cell is {cell.text!r} manual={cell.manual}")
         session.rollback()
 
     print("\n-- nothing here can undo one")

@@ -249,7 +249,7 @@ export default function Corrections({ go }) {
                 autoComplete="off"
                 value={number}
                 onChange={(event) => setNumber(event.target.value)}
-                placeholder="0090"
+                placeholder="four digits"
                 className={box + ' mt-1 font-mono'}
               />
             </div>
@@ -324,7 +324,7 @@ export default function Corrections({ go }) {
                 autoComplete="off"
                 value={lookNumber}
                 onChange={(event) => setLookNumber(event.target.value)}
-                placeholder="0090"
+                placeholder="four digits"
                 className={box + ' mt-1 font-mono'}
               />
             </div>

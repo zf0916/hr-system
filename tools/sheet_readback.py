@@ -19,7 +19,32 @@ import sys
 from openpyxl import load_workbook
 
 from app.db import Session
-from app.sheet import excel_layout, page_layout, period_for, render, to_text
+from app.sheet import (
+    excel_layout,
+    page_layout,
+    period_for,
+    render,
+    schedule_block,
+    to_text,
+)
+
+
+def schedule_block_in(worksheet) -> list[str]:
+    """The schedule block as the file holds it, found by its own first line."""
+    lines: list[str] = []
+    started = False
+    for row in range(1, worksheet.max_row + 1):
+        value = worksheet.cell(row, 1).value
+        text = "" if value is None else str(value)
+        if not started:
+            if text.startswith("the schedule every mark above"):
+                started = True
+                lines.append(text)
+            continue
+        if not text.strip():
+            break
+        lines.append(text)
+    return lines
 
 
 def read_sheet_file(path) -> dict:
@@ -72,6 +97,12 @@ def read_sheet_file(path) -> dict:
         "days": days,
         "numbers": numbers,
         "cells": cells,
+        # The schedule block. It is on the filed record because it is what
+        # every mark on the grid means, not how the grid prints (SPEC §7).
+        # **Found by its own first line rather than by a row number**, so this
+        # reader still reads only the file — a reader that needed the render to
+        # find something in the file could not catch the file having lost it.
+        "schedule_block": schedule_block_in(worksheet),
     }
 
 
@@ -100,6 +131,16 @@ def compare(sheet, file_contents: dict) -> list[str]:
                 f"the unread note came out with content: {file_contents['note']!r}")
         if not (file_contents["note_marker"] or "").strip():
             problems.append("the unread note is not marked as unread in the file")
+
+    expected_block = [line.strip() for line in schedule_block(sheet)]
+    if file_contents["schedule_block"] != expected_block:
+        problems.append(
+            f"the schedule block: file has {len(file_contents['schedule_block'])} "
+            f"line(s), render has {len(expected_block)}; first difference "
+            + repr(next((pair for pair in
+                         zip(file_contents["schedule_block"] + [None] * 99,
+                             expected_block + [None] * 99)
+                         if pair[0] != pair[1]), None)))
 
     page = page_layout(sheet)
     if str(file_contents["orientation"]) != page["orientation"]:
